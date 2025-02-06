@@ -2,7 +2,7 @@ use mangonel_libxdp_sys::xdp_desc;
 
 use crate::socket::Socket;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Descriptor {
     address: u64,
     length: u32,
