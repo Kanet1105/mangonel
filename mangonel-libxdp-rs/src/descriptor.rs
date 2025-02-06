@@ -34,7 +34,7 @@ impl Descriptor {
     pub fn get_data(&mut self, socket: &Socket) -> &mut [u8] {
         let headroom_size = socket.umem().umem_config().frame_headroom;
         let address = self.address - headroom_size as u64;
-        let length = self.length as u64 + headroom_size as u64;
+        let length = self.length as u64 + headroom_size;
         let offset = socket.umem().get_data(address) as *mut u8;
 
         unsafe { std::slice::from_raw_parts_mut(offset, length) }
