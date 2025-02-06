@@ -1,5 +1,4 @@
 use std::{
-    collections::VecDeque,
     ffi::{CString, NulError},
     ptr::{null_mut, NonNull},
     sync::Arc,
@@ -13,11 +12,14 @@ use mangonel_libxdp_sys::{
 };
 
 use crate::{
-    buffer::Buffer,
     descriptor::Descriptor,
-    ring::{ConsumerRing, ConsumerRingUninit, ProducerRing, ProducerRingUninit, RingError},
+    mmap::{Mmap, MmapError},
+    ring_buffer::{
+        BufferReader, BufferWriter, CompletionRing, FillRing, RingBuffer, RingBufferReader,
+        RingBufferWriter, RingError, RxRing, TxRing,
+    },
     umem::{Umem, UmemError},
-    util::setrlimit,
+    util,
 };
 
 #[derive(Debug)]
@@ -49,10 +51,8 @@ impl SocketBuilder {
         self,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(RxSocket, TxSocket), SocketError> {
-        setrlimit();
-
-        let (rx_socket, tx_socket) = Socket::init(
+    ) -> Result<(TxSocket, RxSocket), SocketError> {
+        Socket::init(
             self.frame_size,
             self.frame_headroom_size,
             self.ring_size,
@@ -60,9 +60,7 @@ impl SocketBuilder {
             self.force_zero_copy,
             interface_name,
             queue_id,
-        )?;
-
-        Ok((rx_socket, tx_socket))
+        )
     }
 }
 
@@ -70,7 +68,10 @@ pub struct Socket {
     inner: Arc<SocketInner>,
 }
 
-struct SocketInner(NonNull<xsk_socket>);
+struct SocketInner {
+    socket: NonNull<xsk_socket>,
+    umem: Umem,
+}
 
 unsafe impl Send for SocketInner {}
 
@@ -78,7 +79,7 @@ unsafe impl Sync for SocketInner {}
 
 impl Drop for SocketInner {
     fn drop(&mut self) {
-        unsafe { xsk_socket__delete(self.0.as_ptr()) }
+        unsafe { xsk_socket__delete(self.socket.as_ptr()) }
     }
 }
 
@@ -100,20 +101,26 @@ impl Socket {
         force_zero_copy: bool,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(RxSocket, TxSocket), SocketError> {
-        let umem = Umem::new(frame_size, frame_headroom_size, ring_size, use_hugetlb)?;
+    ) -> Result<(TxSocket, RxSocket), SocketError> {
+        util::setrlimit();
 
-        let mut rx_ring = ConsumerRingUninit::new(ring_size)?;
-        let mut tx_ring = ProducerRingUninit::new(ring_size)?;
+        let length = (frame_size + frame_headroom_size) * ring_size;
+        let mmap = Mmap::new(length as usize, use_hugetlb).map_err(SocketError::Mmap)?;
 
+        let (umem, fill_ring, completion_ring) =
+            Umem::new(mmap, frame_size, frame_headroom_size, ring_size)
+                .map_err(SocketError::Umem)?;
+
+        let mut socket = null_mut();
+        let interface_name =
+            CString::new(interface_name.as_ref()).map_err(SocketError::InvalidInterfaceName)?;
+        let rx_ring = RxRing::new(ring_size).map_err(SocketError::Ring)?;
+        let tx_ring = TxRing::new(ring_size).map_err(SocketError::Ring)?;
         let mut xdp_flags = 0;
         match force_zero_copy {
             true => xdp_flags |= XDP_ZEROCOPY,
             false => xdp_flags |= XDP_COPY,
         }
-
-        let interface_name =
-            CString::new(interface_name.as_ref()).map_err(SocketError::InvalidInterfaceName)?;
 
         let socket_config = xsk_socket_config {
             rx_size: ring_size,
@@ -122,7 +129,6 @@ impl Socket {
             xdp_flags,
             bind_flags: 0,
         };
-        let mut socket = null_mut();
 
         let value = unsafe {
             xsk_socket__create(
@@ -130,8 +136,8 @@ impl Socket {
                 interface_name.as_ptr(),
                 queue_id,
                 umem.as_ptr(),
-                rx_ring.as_mut_ptr(),
-                tx_ring.as_mut_ptr(),
+                rx_ring.as_ptr(),
+                tx_ring.as_ptr(),
                 &socket_config,
             )
         };
@@ -141,147 +147,191 @@ impl Socket {
             )));
         }
 
-        let inner = SocketInner(NonNull::new(socket).unwrap());
         let socket = Self {
-            inner: Arc::new(inner),
-        };
-
-        // Pre-fill the buffer with addresses.
-        let mut prefilled_buffer = VecDeque::<u64>::with_capacity(ring_size as usize);
-        (0..ring_size).for_each(|descriptor_index: u32| {
-            let offset = descriptor_index * (frame_headroom_size + frame_size);
-            prefilled_buffer.push(offset as u64);
-        });
-        umem.fill(&mut prefilled_buffer);
-
-        let rx_socket = RxSocket::new(socket.clone(), rx_ring.init()?, umem.clone());
-        let tx_socket = TxSocket::new(socket.clone(), tx_ring.init()?, umem.clone());
-
-        Ok((rx_socket, tx_socket))
-    }
-
-    #[inline(always)]
-    pub(crate) fn socket_fd(&self) -> i32 {
-        unsafe { xsk_socket__fd(self.inner.0.as_ptr()) }
-    }
-
-    #[inline(always)]
-    pub(crate) fn poll_fd(&self) {
-        let mut poll_fd_struct = pollfd {
-            fd: self.socket_fd(),
-            events: POLLIN,
-            revents: 0,
-        };
-
-        unsafe { poll(&mut poll_fd_struct, 1, 0) };
-    }
-
-    #[inline(always)]
-    pub(crate) fn send_fd(&self) {
-        unsafe { sendto(self.socket_fd(), null_mut(), 0, MSG_DONTWAIT, null_mut(), 0) };
-    }
-}
-
-pub struct RxSocket {
-    socket: Socket,
-    rx_ring: ConsumerRing,
-    umem: Umem,
-}
-
-impl RxSocket {
-    pub fn new(socket: Socket, rx_ring: ConsumerRing, umem: Umem) -> Self {
-        Self {
-            socket,
-            rx_ring,
-            umem,
-        }
-    }
-
-    #[inline(always)]
-    pub fn umem(&self) -> Umem {
-        self.umem.clone()
-    }
-
-    #[inline(always)]
-    pub fn rx_burst<T>(&mut self, buffer: &mut T) -> u32
-    where
-        T: Buffer<Descriptor>,
-    {
-        if self.umem.needs_wakeup() {
-            self.socket.poll_fd();
-        }
-
-        let mut index: u32 = 0;
-        let size = std::cmp::min(buffer.free() as u32, self.rx_ring.size);
-
-        let received = self.rx_ring.peek(size, &mut index);
-        if received > 0 {
-            for _ in 0..received {
-                let descriptor_ptr = self.rx_ring.rx_descriptor(index);
-                let descriptor = Descriptor::from((descriptor_ptr, &self.umem));
-                buffer.push(descriptor);
-                index += 1;
+            inner: SocketInner {
+                socket: NonNull::new(socket).ok_or(SocketError::SocketIsNull)?,
+                umem,
             }
+            .into(),
+        };
 
-            self.rx_ring.release(received);
-        }
+        let mut prefilled_buffer = Vec::<u64>::with_capacity(ring_size as usize);
+        (0..ring_size).for_each(|descriptor_index| {
+            let address = descriptor_index * (frame_size + frame_headroom_size);
+            prefilled_buffer.push(address as u64);
+        });
+        let (buffer_writer, buffer_reader) =
+            RingBuffer::from_vec(prefilled_buffer).map_err(SocketError::Ring)?;
 
-        received
+        let tx_socket = TxSocket::new(socket.clone(), completion_ring, tx_ring, buffer_writer);
+        let rx_socket = RxSocket::new(socket, fill_ring, rx_ring, buffer_reader);
+
+        Ok((tx_socket, rx_socket))
+    }
+
+    #[inline(always)]
+    pub fn socket_fd(&self) -> i32 {
+        unsafe { xsk_socket__fd(self.inner.socket.as_ptr()) }
+    }
+
+    #[inline(always)]
+    pub fn umem(&self) -> &Umem {
+        &self.inner.umem
     }
 }
 
 pub struct TxSocket {
     socket: Socket,
-    tx_ring: ProducerRing,
-    umem: Umem,
+    completion_ring: CompletionRing,
+    tx_ring: TxRing,
+    buffer_writer: RingBufferWriter<u64>,
 }
 
 impl TxSocket {
-    pub fn new(socket: Socket, tx_ring: ProducerRing, umem: Umem) -> Self {
+    fn new(
+        socket: Socket,
+        completion_ring: CompletionRing,
+        tx_ring: TxRing,
+        buffer_writer: RingBufferWriter<u64>,
+    ) -> Self {
         Self {
             socket,
+            completion_ring,
             tx_ring,
-            umem,
+            buffer_writer,
         }
     }
 
     #[inline(always)]
-    pub fn umem(&self) -> Umem {
-        self.umem.clone()
+    fn send(&mut self) {
+        unsafe {
+            sendto(
+                self.socket.socket_fd(),
+                null_mut(),
+                0,
+                MSG_DONTWAIT,
+                null_mut(),
+                0,
+            )
+        };
     }
 
     #[inline(always)]
-    pub fn tx_burst<T>(&mut self, buffer: &mut T) -> u32
-    where
-        T: Buffer<Descriptor>,
-    {
-        let mut index: u32 = 0;
+    fn complete(&mut self, size: u32) -> u32 {
+        let (filled, reader_index) = self.completion_ring.filled(size);
+        let (available, writer_index) = self.buffer_writer.available(filled);
 
-        let available = self.tx_ring.reserve(buffer.count(), &mut index);
         if available > 0 {
-            for _ in 0..available {
-                let descriptor = buffer.pop().unwrap();
-                let descriptor_ptr = self.tx_ring.tx_descriptor(index);
-                unsafe {
-                    (*descriptor_ptr).addr = descriptor.address();
-                    (*descriptor_ptr).len = descriptor.length();
-                }
-                index += 1;
+            for offset in 0..available {
+                let data = self.completion_ring.get(reader_index + offset);
+                let empty = self.buffer_writer.get_mut(writer_index + offset);
+                *empty = *data;
             }
+            self.buffer_writer.advance_index(available);
+            self.completion_ring.advance_index(available);
 
-            self.tx_ring.submit(available);
+            filled
+        } else {
+            0
         }
+    }
 
-        if self.tx_ring.needs_wakeup() {
-            self.socket.send_fd();
+    #[inline(always)]
+    pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
+        let (available, index) = self.tx_ring.available(buffer.len() as u32);
+
+        if available > 0 {
+            for offset in 0..available {
+                let data = self.tx_ring.get_mut(index + offset);
+                data.addr = buffer[offset as usize].address();
+                data.len = buffer[offset as usize].length();
+            }
+            self.tx_ring.advance_index(available);
+            self.send();
+            self.complete(self.socket.umem().umem_config().comp_size);
+
+            available
+        } else {
+            0
         }
+    }
+}
 
-        available
+pub struct RxSocket {
+    socket: Socket,
+    fill_ring: FillRing,
+    rx_ring: RxRing,
+    buffer_reader: RingBufferReader<u64>,
+}
+
+impl RxSocket {
+    fn new(
+        socket: Socket,
+        fill_ring: FillRing,
+        rx_ring: RxRing,
+        buffer_reader: RingBufferReader<u64>,
+    ) -> Self {
+        Self {
+            socket,
+            fill_ring,
+            rx_ring,
+            buffer_reader,
+        }
+    }
+
+    #[inline(always)]
+    fn poll(&self) {
+        let mut poll_fd_struct = pollfd {
+            fd: self.socket.socket_fd(),
+            events: POLLIN,
+            revents: 0,
+        };
+        unsafe { poll(&mut poll_fd_struct, 1, 0) };
+    }
+
+    #[inline(always)]
+    fn fill(&mut self, size: u32) -> u32 {
+        let (filled, reader_index) = self.buffer_reader.filled(size);
+        let (available, writer_index) = self.fill_ring.available(filled);
+        if available > 0 {
+            for offset in 0..available {
+                let data = self.buffer_reader.get(reader_index + offset);
+                let empty = self.fill_ring.get_mut(writer_index + offset);
+                *empty = *data;
+            }
+            self.buffer_reader.advance_index(available);
+            self.fill_ring.advance_index(available);
+
+            available
+        } else {
+            0
+        }
+    }
+
+    #[inline(always)]
+    pub fn read(&mut self, buffer: &mut [Descriptor], burst_size: u32) -> u32 {
+        self.poll();
+        self.fill(self.socket.umem().umem_config().fill_size);
+        let (filled, index) = self.rx_ring.filled(burst_size);
+
+        if filled > 0 {
+            for offset in 0..filled {
+                let descriptor_ref = self.rx_ring.get(index + offset);
+                let descriptor = Descriptor::from(descriptor_ref);
+                buffer[offset as usize] = descriptor;
+            }
+            self.rx_ring.advance_index(filled);
+
+            filled
+        } else {
+            0
+        }
     }
 }
 
 #[derive(Debug)]
 pub enum SocketError {
+    Mmap(MmapError),
     Umem(UmemError),
     Ring(RingError),
     InvalidInterfaceName(NulError),
@@ -296,15 +346,3 @@ impl std::fmt::Display for SocketError {
 }
 
 impl std::error::Error for SocketError {}
-
-impl From<UmemError> for SocketError {
-    fn from(value: UmemError) -> Self {
-        Self::Umem(value)
-    }
-}
-
-impl From<RingError> for SocketError {
-    fn from(value: RingError) -> Self {
-        Self::Ring(value)
-    }
-}
