@@ -44,16 +44,6 @@ struct RingBufferInner<T: Copy> {
 
 unsafe impl<T: Copy> Send for RingBuffer<T> {}
 
-impl<T: Copy> std::fmt::Debug for RingBuffer<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "capacity: {:?}, head: {:?}, tail: {:?}",
-            self.inner.capacity, self.inner.head, self.inner.tail,
-        )
-    }
-}
-
 impl<T: Copy> Clone for RingBuffer<T> {
     fn clone(&self) -> Self {
         Self {
@@ -63,7 +53,9 @@ impl<T: Copy> Clone for RingBuffer<T> {
 }
 
 impl<T: Copy> RingBuffer<T> {
-    pub fn new(capacity: u32) -> Result<(RingBufferWriter<T>, RingBufferReader<T>), RingError> {
+    pub fn with_capacity(
+        capacity: u32,
+    ) -> Result<(RingBufferWriter<T>, RingBufferReader<T>), RingError> {
         let mut buffer = Vec::<T>::with_capacity(capacity as usize);
         let t = unsafe { MaybeUninit::<T>::zeroed().assume_init() };
         (0..capacity).for_each(|_| buffer.push(t));
@@ -105,12 +97,12 @@ impl<T: Copy> RingBuffer<T> {
     }
 
     #[inline(always)]
-    pub fn as_mut(&self) -> &mut Vec<T> {
+    pub fn buffer_mut(&mut self) -> &mut Vec<T> {
         unsafe { self.inner.buffer.as_ptr().as_mut().unwrap() }
     }
 
     #[inline(always)]
-    pub fn as_ref(&self) -> &Vec<T> {
+    pub fn buffer_ref(&self) -> &Vec<T> {
         unsafe { self.inner.buffer.as_ref() }
     }
 
@@ -162,7 +154,7 @@ impl<T: Copy> BufferWriter<T> for RingBufferWriter<T> {
     #[inline(always)]
     fn get_mut(&mut self, index: u32) -> &mut T {
         let index = index % self.ring_buffer.capacity();
-        let ring_buffer = self.ring_buffer.as_mut();
+        let ring_buffer = self.ring_buffer.buffer_mut();
 
         ring_buffer.get_mut(index as usize).unwrap()
     }
@@ -200,7 +192,7 @@ impl<T: Copy> BufferReader<T> for RingBufferReader<T> {
     #[inline(always)]
     fn get(&self, index: u32) -> &T {
         let index = index % self.ring_buffer.capacity();
-        let ring_buffer = self.ring_buffer.as_ref();
+        let ring_buffer = self.ring_buffer.buffer_ref();
 
         ring_buffer.get(index as usize).unwrap()
     }
