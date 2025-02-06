@@ -10,4 +10,4 @@ resolver = "2"
 authors = ["Donghoon Lee <zombiedelah@gmail.com>"]
 license = "BSD-3-Clause"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.84"
