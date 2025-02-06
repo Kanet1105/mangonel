@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 use bindgen::Builder;
 
 const LIB_NAME: &str = "libxdp";
-const LIB_VERSION: &str = "1.4";
+const LIB_VERSION: &str = "1.4.0";
 const WRAPPER: &str = "wrapper.h";
 
 fn check_os() {
@@ -13,17 +13,13 @@ fn check_os() {
 }
 
 /// Link a library by its name and version.
-///
-/// # Panics
-///
-/// Panics either when the program fails to find the library in the
-/// default system library path or when the installed library version
-/// does not satisfy the minimum version given by "version" parameter.
 fn link_library(name: &str, version: &str) {
-    pkg_config::Config::new()
-        .atleast_version(version)
-        .probe(name)
-        .unwrap_or_else(|error| panic!("Failed to link the library: {}", error));
+    println!("cargo::rerun-if-changed={}", WRAPPER);
+
+    if cfg!(target_os = "linux") {
+        println!("cargo::rustc-link-search=/usr/local/lib/");
+        println!("cargo::rustc-link-lib={}.so.{}", name, version);
+    }
 }
 
 fn main() {
