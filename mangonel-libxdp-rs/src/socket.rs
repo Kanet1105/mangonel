@@ -219,22 +219,16 @@ impl TxSocket {
     #[inline(always)]
     fn complete(&mut self, size: u32) -> u32 {
         let (filled, reader_index) = self.completion_ring.filled(size);
-        if filled > 0 {
-            println!("[Complete] Filled: {}", filled);
-        }
-        let (available, writer_index) = self.buffer_writer.available(size);
-        if available > 0 {
-            println!("[Complete] Available: {}", available);
-        }
+        let (available, writer_index) = self.buffer_writer.available(filled);
 
-        if filled > 0 {
-            for offset in 0..filled {
+        if available > 0 {
+            for offset in 0..available {
                 let data = self.completion_ring.get(reader_index + offset);
                 let empty = self.buffer_writer.get_mut(writer_index + offset);
                 *empty = *data;
             }
-            self.buffer_writer.advance_index(filled);
-            self.completion_ring.advance_index(filled);
+            self.buffer_writer.advance_index(available);
+            self.completion_ring.advance_index(available);
 
             filled
         } else {
@@ -298,14 +292,7 @@ impl RxSocket {
     #[inline(always)]
     fn fill(&mut self, size: u32) -> u32 {
         let (filled, reader_index) = self.buffer_reader.filled(size);
-        if filled > 0 {
-            println!("[Fill] Filled: {}", filled);
-        }
         let (available, writer_index) = self.fill_ring.available(filled);
-        if available > 0 {
-            println!("[Fill] Available: {}", available);
-        }
-
         if available > 0 {
             for offset in 0..available {
                 let data = self.buffer_reader.get(reader_index + offset);
