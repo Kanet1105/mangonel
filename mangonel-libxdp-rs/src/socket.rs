@@ -243,14 +243,14 @@ impl TxSocket {
     }
 
     #[inline(always)]
-    pub fn write(&mut self, buffer: &[u64]) -> u32 {
+    pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
         let (available, index) = self.tx_ring.available(buffer.len() as u32);
 
         if available > 0 {
             for offset in 0..available {
                 let data = self.tx_ring.get_mut(index + offset);
-                data.addr = buffer[offset as usize];
-                println!("{:?}", data);
+                data.addr = buffer[offset as usize].address();
+                data.len = buffer[offset as usize].length();
             }
             self.tx_ring.advance_index(available);
             self.send();
@@ -330,7 +330,7 @@ impl RxSocket {
         if filled > 0 {
             for offset in 0..filled {
                 let descriptor_ref = self.rx_ring.get(index + offset);
-                let descriptor = Descriptor::from((descriptor_ref, &self.socket));
+                let descriptor = Descriptor::from(descriptor_ref);
                 buffer[offset as usize] = descriptor;
             }
             self.rx_ring.advance_index(filled);
