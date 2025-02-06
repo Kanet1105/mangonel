@@ -3,7 +3,7 @@ use std::{env, path::PathBuf};
 use bindgen::Builder;
 
 const LIB_NAME: &str = "libxdp";
-const LIB_VERSION: &str = "1.4.0";
+const LIB_VERSION: &str = "1.4";
 const WRAPPER: &str = "wrapper.h";
 
 fn check_os() {
