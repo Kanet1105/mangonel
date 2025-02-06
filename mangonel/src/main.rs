@@ -22,19 +22,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let worker = thread::spawn({
         let flag = flag.clone();
-        let mut buffer = Vec::<Descriptor>::with_capacity(10);
+        let mut buffer = [Descriptor::default(); 10];
 
         move || {
             while flag.load(Ordering::SeqCst) {
                 let n = receiver.read(&mut buffer, 10);
-                if n > 0 {
-                    println!("Read: {:?}", n);
-
-                    let n = sender.write(&buffer[0..n as usize]);
-                    if n > 0 {
-                        println!("Wrote: {}", n);
-                    }
+                for index in 0..n {
+                    println!("{:?}", buffer[index as usize]);
                 }
+
+                sender.write(&buffer[0..n as usize]);
             }
         }
     });
