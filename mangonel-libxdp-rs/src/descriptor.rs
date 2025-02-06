@@ -10,11 +10,9 @@ pub struct Descriptor {
 
 impl From<&xdp_desc> for Descriptor {
     fn from(value: &xdp_desc) -> Self {
-        unsafe {
-            Self {
-                address: value.addr,
-                length: value.len,
-            }
+        Self {
+            address: value.addr,
+            length: value.len,
         }
     }
 }
@@ -37,6 +35,6 @@ impl Descriptor {
         let length = self.length as u64 + headroom_size;
         let offset = socket.umem().get_data(address) as *mut u8;
 
-        unsafe { std::slice::from_raw_parts_mut(offset, length) }
+        unsafe { std::slice::from_raw_parts_mut(offset, length as usize) }
     }
 }
