@@ -1,6 +1,7 @@
 use std::{
     ffi::c_void,
     ptr::{null_mut, NonNull},
+    sync::Arc,
 };
 
 use mangonel_libxdp_sys::{
@@ -14,12 +15,17 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Umem {
+    inner: Arc<UmemInner>,
+}
+
+#[derive(Debug)]
+struct UmemInner {
     umem: NonNull<xsk_umem>,
     umem_config: xsk_umem_config,
     mmap: Mmap,
 }
 
-impl Drop for Umem {
+impl Drop for UmemInner {
     /// # Panics
     ///
     /// The program panics when it fails to clean up. This is not a problem
@@ -32,6 +38,15 @@ impl Drop for Umem {
                 "{:?}",
                 UmemError::Free(std::io::Error::from_raw_os_error(-value))
             );
+        }
+    }
+}
+
+impl Clone for Umem {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
         }
     }
 }
@@ -71,9 +86,12 @@ impl Umem {
         }
 
         let umem = Self {
-            umem: NonNull::new(umem_ptr).ok_or(UmemError::UmemIsNull)?,
-            umem_config,
-            mmap,
+            inner: UmemInner {
+                umem: NonNull::new(umem_ptr).ok_or(UmemError::UmemIsNull)?,
+                umem_config,
+                mmap,
+            }
+            .into(),
         };
 
         Ok((umem, fill_ring, completion_ring))
@@ -81,22 +99,22 @@ impl Umem {
 
     #[inline(always)]
     pub fn umem_config(&self) -> &xsk_umem_config {
-        &self.umem_config
+        &self.inner.umem_config
     }
 
     #[inline(always)]
     pub fn mmap(&self) -> &Mmap {
-        &self.mmap
+        &self.inner.mmap
     }
 
     #[inline(always)]
     pub fn as_ptr(&self) -> *mut xsk_umem {
-        self.umem.as_ptr()
+        self.inner.umem.as_ptr()
     }
 
     #[inline(always)]
     pub fn get_data(&self, address: u64) -> *mut c_void {
-        unsafe { xsk_umem__get_data(self.mmap.as_ptr(), address) }
+        unsafe { xsk_umem__get_data(self.inner.mmap.as_ptr(), address) }
     }
 }
 
