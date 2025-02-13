@@ -173,11 +173,6 @@ impl Socket {
     pub fn socket_fd(&self) -> i32 {
         unsafe { xsk_socket__fd(self.inner.socket.as_ptr()) }
     }
-
-    #[inline(always)]
-    pub fn umem(&self) -> &Umem {
-        &self.inner.umem
-    }
 }
 
 pub struct TxSocket {
@@ -248,12 +243,17 @@ impl TxSocket {
             }
             self.tx_ring.advance_index(available);
             self.send();
-            self.complete(self.socket.umem().umem_config().comp_size);
+            self.complete(self.socket.inner.umem.umem_config().comp_size);
 
             available
         } else {
             0
         }
+    }
+
+    #[inline(always)]
+    pub fn umem(&self) -> Umem {
+        self.socket.inner.umem.clone()
     }
 }
 
@@ -311,7 +311,7 @@ impl RxSocket {
     #[inline(always)]
     pub fn read(&mut self, buffer: &mut [Descriptor], burst_size: u32) -> u32 {
         self.poll();
-        self.fill(self.socket.umem().umem_config().fill_size);
+        self.fill(self.socket.inner.umem.umem_config().fill_size);
         let (filled, index) = self.rx_ring.filled(burst_size);
 
         if filled > 0 {
@@ -326,6 +326,11 @@ impl RxSocket {
         } else {
             0
         }
+    }
+
+    #[inline(always)]
+    pub fn umem(&self) -> Umem {
+        self.socket.inner.umem.clone()
     }
 }
 
