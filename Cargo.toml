@@ -1,8 +1,8 @@
 [workspace]
 members = [
     "mangonel",
-    "mangonel-libxdp-rs",
-    "mangonel-libxdp-sys",
+    "crates/libxdp",
+    "crates/libxdp-sys",
 ]
 resolver = "2"
 
@@ -11,3 +11,7 @@ authors = ["Donghoon Lee <zombiedelah@gmail.com>"]
 license = "BSD-3-Clause"
 edition = "2021"
 rust-version = "1.84"
+
+[workspace.dependencies]
+mangonel-libxdp = { path = "crates/libxdp" }
+mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
