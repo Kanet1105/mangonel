@@ -1,9 +1,5 @@
 [workspace]
-members = [
-    "mangonel",
-    "crates/libxdp",
-    "crates/libxdp-sys",
-]
+members = ["mangonel", "crates/libxdp", "crates/libxdp-sys", "crates/gui"]
 resolver = "2"
 
 [workspace.package]
@@ -15,3 +11,15 @@ rust-version = "1.84"
 [workspace.dependencies]
 mangonel-libxdp = { path = "crates/libxdp" }
 mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"
