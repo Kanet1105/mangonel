@@ -1,4 +1,5 @@
 use crate::components::login::LoginForm;
+use crate::components::node_link::NodeLinkForm;
 use crate::components::two_factor::TwoFactorForm;
 use dioxus::prelude::*;
 
@@ -14,7 +15,12 @@ pub fn App() -> Element {
                 }
             },
             AppState::TwoFactor => rsx! {
-                TwoFactorForm {  }
+                TwoFactorForm {
+                    on_success: move || state.set(AppState::NodeLink)
+                }
+            },
+            AppState::NodeLink => rsx! {
+                NodeLinkForm { }
             },
         }
     }
@@ -24,4 +30,5 @@ pub fn App() -> Element {
 enum AppState {
     Login,
     TwoFactor,
+    NodeLink,
 }

@@ -1,21 +1,28 @@
 use dioxus::prelude::*;
 
-#[derive(Debug, Clone, PartialEq)]
-enum LoginState {
-    Idle,
-    Failure,
-}
-
-#[derive(Props, PartialEq, Clone)]
-pub struct LoginFormProps {
-    pub on_success: Callback<()>,
-}
-
 #[component]
-pub fn LoginForm(props: LoginFormProps) -> Element {
-    let mut id = use_signal(String::new);
-    let mut password = use_signal(String::new);
-    let mut login_state = use_signal(|| LoginState::Idle);
+pub fn NodeLinkForm() -> Element {
+    let mut ip = use_signal(|| "192.168.0.1".to_string());
+    let mut port = use_signal(|| "8080".to_string());
+    let mut token = use_signal(String::new);
+    let mut status = use_signal(|| None::<String>);
+
+    let on_connect = move |_| {
+        let target = format!("http://{}:{}", ip(), port());
+        let auth_token = token();
+
+        spawn(async move {
+            match try_health_check(&target, &auth_token).await {
+                Ok(_) => {
+                    println!("Connection and health check passed.");
+                    // TODO: Page navigation
+                }
+                Err(e) => {
+                    status.set(Some(e));
+                }
+            }
+        });
+    };
 
     rsx! {
         div {
@@ -50,21 +57,10 @@ pub fn LoginForm(props: LoginFormProps) -> Element {
 
                 h2 {
                     style: "font-size: 20px; font-weight: bold; text-align: center; margin-bottom: 24px;",
-                    "Login"
-                }
-
-                if *login_state.read() == LoginState::Failure {
-                    p {
-                        style: "color: red; font-size: 14px; margin-bottom: 12px; text-align: center;",
-                        "Wrong ID or password. Please try again."
-                    }
+                    "Access to the Equipment"
                 }
 
                 input {
-                    r#type: "text",
-                    placeholder: "ID",
-                    value: "{id.read()}",
-                    oninput: move |e| id.set(e.value().to_string()),
                     style: "
                         width: 93%;
                         padding: 10px;
@@ -73,13 +69,26 @@ pub fn LoginForm(props: LoginFormProps) -> Element {
                         border-radius: 4px;
                         font-size: 16px;
                     ",
+                    placeholder: "IP (ex: 192.168.0.1)",
+                    value: "{ip()}",
+                    oninput: move |e| ip.set(e.value())
                 }
 
                 input {
-                    r#type: "password",
-                    placeholder: "Password",
-                    value: "{password.read()}",
-                    oninput: move |e| password.set(e.value().to_string()),
+                    style: "
+                        width: 93%;
+                        padding: 10px;
+                        margin-bottom: 12px;
+                        border: 1px solid #ccc;
+                        border-radius: 4px;
+                        font-size: 16px;
+                    ",
+                    placeholder: "Port (ex: 8080)",
+                    value: "{port()}",
+                    oninput: move |e| port.set(e.value())
+                }
+
+                input {
                     style: "
                         width: 93%;
                         padding: 10px;
@@ -88,10 +97,13 @@ pub fn LoginForm(props: LoginFormProps) -> Element {
                         border-radius: 4px;
                         font-size: 16px;
                     ",
+                    placeholder: "Auth Token",
+                    value: "{token()}",
+                    oninput: move |e| token.set(e.value())
                 }
 
                 button {
-                    onclick: move |_| handle_login(id.clone(), password.clone(), props.clone(), &mut login_state),
+                    onclick: on_connect,
                     style: "
                         width: 100%;
                         padding: 12px;
@@ -103,22 +115,33 @@ pub fn LoginForm(props: LoginFormProps) -> Element {
                         cursor: pointer;
                         font-size: 16px;
                     ",
-                    "Login"
+                    "Connect"
+                }
+
+                if let Some(message) = status() {
+                    p {
+                        style: "color: red; font-size: 14px; margin-top: 12px; padding-left: 4px;",
+                        "{message}"
+                    }
                 }
             }
         }
     }
 }
 
-fn handle_login(
-    id: Signal<String>,
-    password: Signal<String>,
-    props: LoginFormProps,
-    login_state: &mut Signal<LoginState>,
-) {
-    if id.read().as_str() == "admin" && password.read().as_str() == "1234" {
-        props.on_success.call(());
+async fn try_health_check(target: &str, token: &str) -> Result<(), String> {
+    let url = format!("{}/health", target);
+
+    let res = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {}", e))?;
+
+    if res.status().is_success() {
+        Ok(())
     } else {
-        login_state.set(LoginState::Failure);
+        Err(format!("health check failed: {}", res.status()))
     }
 }

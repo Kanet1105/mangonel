@@ -1,5 +1,11 @@
 [workspace]
-members = ["mangonel", "crates/libxdp", "crates/libxdp-sys", "crates/gui"]
+members = [
+    "mangonel",
+    "crates/libxdp",
+    "crates/libxdp-sys",
+    "crates/gui",
+    "crates/server",
+]
 resolver = "2"
 
 [workspace.package]
