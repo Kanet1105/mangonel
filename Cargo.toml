@@ -3,6 +3,7 @@ members = [
     "mangonel",
     "crates/libxdp",
     "crates/libxdp-sys",
+    "crates/worker",
 ]
 resolver = "2"
 
@@ -15,3 +16,4 @@ rust-version = "1.84"
 [workspace.dependencies]
 mangonel-libxdp = { path = "crates/libxdp" }
 mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
+mangonel-worker = { path = "crates/worker" }
