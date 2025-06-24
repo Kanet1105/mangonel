@@ -1,0 +1,12 @@
+[package]
+name = "mangonel-libxdp"
+version = "0.1.0"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mangonel-libxdp-sys = { workspace = true }
+
+libc = "0.2"

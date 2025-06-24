@@ -42,6 +42,8 @@ impl Drop for UmemInner {
     }
 }
 
+unsafe impl Send for Umem {}
+
 impl Clone for Umem {
     #[inline(always)]
     fn clone(&self) -> Self {
