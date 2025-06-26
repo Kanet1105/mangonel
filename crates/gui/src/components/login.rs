@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq)]
 enum LoginState {
@@ -8,7 +9,7 @@ enum LoginState {
 
 #[derive(Props, PartialEq, Clone)]
 pub struct LoginFormProps {
-    pub on_success: Callback<()>,
+    pub on_success: Callback<String>,
 }
 
 #[component]
@@ -110,15 +111,60 @@ pub fn LoginForm(props: LoginFormProps) -> Element {
     }
 }
 
+#[derive(Serialize)]
+struct LoginRequest {
+    email: String,
+    password: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct LoginResponse {
+    status: String,
+    email: Option<String>,
+}
+
 fn handle_login(
     id: Signal<String>,
     password: Signal<String>,
     props: LoginFormProps,
     login_state: &mut Signal<LoginState>,
 ) {
-    if id.read().as_str() == "admin" && password.read().as_str() == "1234" {
-        props.on_success.call(());
-    } else {
-        login_state.set(LoginState::Failure);
-    }
+    let id = id();
+    let password = password();
+    let mut login_state = login_state.to_owned();
+    let on_success = props.on_success.clone();
+
+    spawn(async move {
+        let client = reqwest::Client::new();
+        let res = client
+            .post("http://localhost:3001/login")
+            .json(&LoginRequest {
+                email: id,
+                password,
+            })
+            .send()
+            .await;
+
+        match res {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    login_state.set(LoginState::Failure);
+                    return;
+                }
+
+                match response.json::<LoginResponse>().await {
+                    Ok(body) if body.status == "Ok" => {
+                        login_state.set(LoginState::Idle);
+                        on_success.call(body.email.unwrap());
+                    }
+                    _ => {
+                        login_state.set(LoginState::Failure);
+                    }
+                }
+            }
+            Err(_) => {
+                login_state.set(LoginState::Failure);
+            }
+        }
+    });
 }

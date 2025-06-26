@@ -8,14 +8,15 @@ pub fn App() -> Element {
     let mut state = use_signal(|| AppState::Login);
 
     rsx! {
-        match *state.read() {
+        match state.read().clone() {
             AppState::Login => rsx! {
                 LoginForm {
-                    on_success: move || state.set(AppState::TwoFactor)
+                    on_success: move |email: String| state.set(AppState::TwoFactor(email.clone()))
                 }
             },
-            AppState::TwoFactor => rsx! {
+            AppState::TwoFactor(email) => rsx! {
                 TwoFactorForm {
+                    email,
                     on_success: move || state.set(AppState::NodeLink)
                 }
             },
@@ -29,6 +30,6 @@ pub fn App() -> Element {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AppState {
     Login,
-    TwoFactor,
+    TwoFactor(String),
     NodeLink,
 }

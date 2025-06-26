@@ -7,6 +7,7 @@ pub fn TwoFactorPage(props: TwoFactorFormProps) -> Element {
         div {
             class: "h-screen flex items-center justify-center bg-gray-100",
             TwoFactorForm {
+                email: props.email,
                 on_success: props.on_success,
             }
         }

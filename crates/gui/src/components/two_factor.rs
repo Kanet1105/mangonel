@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use serde::Serialize;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,6 +14,7 @@ enum AuthStatus {
 
 #[derive(Props, PartialEq, Clone)]
 pub struct TwoFactorFormProps {
+    pub email: String,
     pub on_success: Callback<()>,
 }
 
@@ -22,16 +24,17 @@ pub struct AuthToken(pub String);
 #[component]
 pub fn TwoFactorForm(props: TwoFactorFormProps) -> Element {
     let mut code_input = use_signal(String::new);
-    let countdown: Signal<u16> = use_signal(|| 180);
+    let countdown: Signal<u16> = use_signal(|| 90);
     let countdown_version: Signal<u64> = use_signal(|| 0);
     let status = use_signal(|| AuthStatus::Idle);
     let mut init = use_signal(|| false);
     let auth_token = use_signal(String::new);
+    let email = use_signal(|| props.email);
 
     use_effect(move || {
         if !*init.read() {
             init.set(true);
-            trigger_send_code(countdown, status, countdown_version);
+            trigger_send_code(email, countdown, status, countdown_version);
         }
     });
 
@@ -93,7 +96,7 @@ pub fn TwoFactorForm(props: TwoFactorFormProps) -> Element {
                 }
 
                 button {
-                    onclick: on_submit_handler(code_input, status, auth_token),
+                    onclick: on_submit_handler(email, code_input, status, auth_token),
                     style: "
                         width: 100%;
                         padding: 12px;
@@ -110,7 +113,7 @@ pub fn TwoFactorForm(props: TwoFactorFormProps) -> Element {
                 }
 
                 button {
-                    onclick: on_resend_handler(countdown, status, countdown_version),
+                    onclick: on_resend_handler(email, countdown, status, countdown_version),
                     style: "
                         font-size: 14px;
                         color: #007bff;
@@ -161,6 +164,7 @@ pub fn TwoFactorForm(props: TwoFactorFormProps) -> Element {
 }
 
 fn trigger_send_code(
+    email: Signal<String>,
     countdown: Signal<u16>,
     status: Signal<AuthStatus>,
     countdown_version: Signal<u64>,
@@ -173,12 +177,12 @@ fn trigger_send_code(
         async move {
             status.set(AuthStatus::Sending);
 
-            let res = send_code_request().await;
+            let res = send_code_request(email.read().clone()).await;
 
             match res {
                 Ok(IsRateLimited::NotRateLimited) => {
                     status.set(AuthStatus::Sent);
-                    countdown.set(180);
+                    countdown.set(90);
 
                     while *countdown.read() > 0 {
                         async_std::task::sleep(Duration::from_secs(1)).await;
@@ -225,41 +229,54 @@ enum IsRateLimited {
     NotRateLimited,
 }
 
-async fn send_code_request() -> Result<IsRateLimited, String> {
+#[derive(Serialize)]
+struct SendCodeRequest {
+    email: String,
+}
+
+async fn send_code_request(email: String) -> Result<IsRateLimited, String> {
     let client = reqwest::Client::new();
     let res = client
-        .post("http://localhost:3000/api/send_code")
-        .json(&serde_json::json!({ "to": "datactress@gmail.com" }))
+        .post("http://localhost:3002/register")
+        .json(&serde_json::json!(&SendCodeRequest { email }))
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
-    let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-
-    match data.get("status") {
-        Some(serde_json::Value::String(status)) if status == "rate limited" => {
-            let cooldown = data.get("cooldown").and_then(|v| v.as_u64());
-            return Ok(IsRateLimited::RateLimited(cooldown.unwrap_or(0) as u16));
+    match res.status() {
+        reqwest::StatusCode::OK => {
+            return Ok(IsRateLimited::NotRateLimited);
         }
-
-        Some(serde_json::Value::String(status)) if status == "sent" => {
-            return Ok(IsRateLimited::NotRateLimited)
+        reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+            let cool_down = data.get("cooldown").and_then(|v| v.as_u64()).unwrap_or(600) as u16; // Default cooldown if not provided
+            return Ok(IsRateLimited::RateLimited(cool_down)); // Assuming a cooldown of 600 seconds
         }
-        _ => return Err("Invalid response from server".into()),
+        _ => {
+            return Err(format!("Unexpected status code: {}", res.status()));
+        }
     }
 }
 
 fn on_resend_handler(
+    email: Signal<String>,
     countdown: Signal<u16>,
     status: Signal<AuthStatus>,
     countdown_version: Signal<u64>,
 ) -> impl Fn(Event<MouseData>) {
     move |_| {
-        trigger_send_code(countdown, status, countdown_version);
+        trigger_send_code(email, countdown, status, countdown_version);
     }
 }
 
+#[derive(Serialize)]
+struct VerifyCodeRequest {
+    email: String,
+    code: u32,
+}
+
 fn on_submit_handler(
+    email: Signal<String>,
     code_input: Signal<String>,
     status: Signal<AuthStatus>,
     auth_token: Signal<String>,
@@ -272,30 +289,50 @@ fn on_submit_handler(
         spawn(async move {
             let client = reqwest::Client::new();
             let res = client
-                .post("http://localhost:3000/api/verify_code")
-                .json(&serde_json::json!({ "code": input_code }))
+                .post("http://localhost:3002/verify")
+                .json(&serde_json::json!(&VerifyCodeRequest {
+                    email: email.read().clone(),
+                    code: input_code.parse::<u32>().unwrap()
+                }))
                 .send()
-                .await;
+                .await
+                .map_err(|e| format!("Request failed: {}", e))
+                .unwrap();
 
-            match res {
-                Ok(resp) => {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if json.get("status") == Some(&serde_json::Value::String("ok".into())) {
-                            if let Some(token_str) = json.get("token").and_then(|t| t.as_str()) {
-                                token.set(token_str.to_string());
-                                status.set(AuthStatus::Verified);
-                            } else {
-                                status.set(AuthStatus::Error("No token received".into()));
-                            }
-                        } else {
-                            status.set(AuthStatus::Error("Invalid code".into()));
-                        }
+            match res.status() {
+                reqwest::StatusCode::OK => {
+                    let body: serde_json::Value = res.json().await.unwrap();
+                    if let Some(token_str) = body.get("token").and_then(|v| v.as_str()) {
+                        token.set(token_str.to_string());
+                        status.set(AuthStatus::Verified);
                     } else {
-                        status.set(AuthStatus::Error("Invalid response".into()));
+                        status.set(AuthStatus::Error("No token received".into()));
                     }
                 }
-                Err(_) => status.set(AuthStatus::Error("Request failed".into())),
+                _ => {
+                    status.set(AuthStatus::Error("Failed to verify code".into()));
+                }
             }
+
+            // match res {
+            //     Ok(resp) => {
+            //         if let Ok(json) = resp.json::<serde_json::Value>().await {
+            //             if json.get("status") == Some(&serde_json::Value::String("ok".into())) {
+            //                 if let Some(token_str) = json.get("token").and_then(|t| t.as_str()) {
+            //                     token.set(token_str.to_string());
+            //                     status.set(AuthStatus::Verified);
+            //                 } else {
+            //                     status.set(AuthStatus::Error("No token received".into()));
+            //                 }
+            //             } else {
+            //                 status.set(AuthStatus::Error("Invalid code".into()));
+            //             }
+            //         } else {
+            //             status.set(AuthStatus::Error("Invalid response".into()));
+            //         }
+            //     }
+            //     Err(_) => status.set(AuthStatus::Error("Request failed".into())),
+            // }
         });
     }
 }
