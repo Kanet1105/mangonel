@@ -13,6 +13,15 @@ pub struct User {
     pub password: String,
 }
 
+#[derive(Debug)]
+pub enum AuthError {
+    InvalidCredentials,
+    UserAlreadyExists,
+    UserFileNotFound,
+    UserNotFound,
+    UserLocked,
+}
+
 fn get_user_file_path() -> PathBuf {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let data_dir = project_root.join(RELATIVE_DATA_PATH);
@@ -28,12 +37,12 @@ fn get_user_file_path() -> PathBuf {
 #[derive(Serialize, Deserialize)]
 pub struct Users(pub HashMap<String, String>);
 
-fn load_users() -> Result<HashMap<String, String>, String> {
+fn load_users() -> Result<HashMap<String, String>, AuthError> {
     let path = get_user_file_path();
 
     if !path.exists() {
         save_users(&HashMap::new());
-        return Err("User file not found, created a new one.".into());
+        return Err(AuthError::UserFileNotFound);
     }
 
     Ok(read_to_string(path)
@@ -48,20 +57,22 @@ fn save_users(users: &HashMap<String, String>) {
     write(path, json).expect("failed to write user file");
 }
 
-pub fn register(email: &str, password: &str) -> Result<(), String> {
+pub fn register(email: &str, password: &str) -> Result<(), AuthError> {
     let mut users = load_users().unwrap();
     if users.contains_key(email) {
-        return Err("User already exists".into());
+        return Err(AuthError::UserAlreadyExists);
     }
     users.insert(email.to_string(), password.to_string());
     save_users(&users);
     Ok(())
 }
 
-pub fn login(email: &str, password: &str) -> Result<String, String> {
+pub fn login(email: &str, password: &str) -> Result<String, AuthError> {
     let users = load_users().unwrap();
     match users.get(email) {
         Some(stored) if stored == password => Ok(email.to_string()),
-        _ => Err("Invalid credentials".into()),
+        Some(_) => Err(AuthError::InvalidCredentials),
+        _ => Err(AuthError::UserNotFound),
+        // TODO: Handle user locked state if needed
     }
 }

@@ -1,7 +1,8 @@
 use axum::response::IntoResponse;
 use axum::Json;
-use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+
+use crate::routes::error::ApiError;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -9,40 +10,25 @@ pub struct LoginRequest {
     password: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct LoginResponse {
-    status: String,
-    email: Option<String>,
+#[derive(Serialize)]
+pub struct LoginSuccess {
+    pub email: String,
 }
 
 pub async fn login(Json(payload): Json<LoginRequest>) -> impl IntoResponse {
     match crate::services::auth::login(&payload.email, &payload.password) {
         Ok(email) => {
             if !is_tfa_server_healthy().await {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(LoginResponse {
-                        status: "Failure".into(),
-                        email: None,
-                    }),
-                );
+                return Err(Json(ApiError::Internal));
             }
 
-            (
-                StatusCode::OK,
-                Json(LoginResponse {
-                    status: "Ok".into(),
-                    email: Some(email),
-                }),
-            )
+            Ok(Json(LoginSuccess {
+                email: email.clone(),
+            }))
         }
-        Err(_e) => (
-            StatusCode::UNAUTHORIZED,
-            Json(LoginResponse {
-                status: "Failure".into(),
-                email: None,
-            }),
-        ),
+        Err(_e) => Err(Json(ApiError::Unauthorized(Some(
+            "Invalid credentials".to_string(),
+        )))),
     }
 }
 

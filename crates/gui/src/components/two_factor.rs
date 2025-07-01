@@ -1,6 +1,7 @@
-use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+use dioxus::prelude::*;
+use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq)]
 enum AuthStatus {
@@ -275,24 +276,19 @@ struct VerifyCodeRequest {
     code: u32,
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum ErrorKind {
-    TooManyRequests,
-    NotFound,
-    InvalidCode,
-    Internal,
+#[derive(serde::Deserialize)]
+struct VerifyCodeSuccess {
+    token: String,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "status", content = "data")]
-pub enum VerifyCodeResponse {
-    Ok {
-        token: String,
-    },
-    Error {
-        kind: ErrorKind,
-        message: Option<String>,
-    },
+#[derive(serde::Deserialize)]
+#[serde(tag = "error", content = "message")]
+pub enum ApiError {
+    Unauthorized(Option<String>),
+    TooManyRegisterRequests(Option<u16>),
+    TooManyGetTokenRequests,
+    NotFound,
+    Internal,
 }
 
 fn on_submit_handler(
@@ -320,32 +316,13 @@ fn on_submit_handler(
                 .unwrap();
 
             match res.status() {
-                reqwest::StatusCode::OK => {
-                    let res = res.json::<VerifyCodeResponse>().await;
-
-                    match res {
-                        Ok(res) => match res {
-                            VerifyCodeResponse::Ok { token: t } => {
-                                status.set(AuthStatus::Verified);
-                                token.set(t);
-                            }
-                            VerifyCodeResponse::Error { kind, message } => {
-                                let msg = match kind {
-                                    ErrorKind::TooManyRequests => {
-                                        "Too many requests. Please try again later."
-                                    }
-                                    ErrorKind::NotFound => "Email not registered.",
-                                    ErrorKind::InvalidCode => "Invalid verification code.",
-                                    ErrorKind::Internal => "Internal server error.",
-                                };
-                                status.set(AuthStatus::Error(format!("Error: {msg}").into()));
-                            }
-                        },
-                        Err(e) => {
-                            status.set(AuthStatus::Error(format!("No token received. {e}").into()));
-                        }
+                reqwest::StatusCode::OK => match res.json::<VerifyCodeSuccess>().await {
+                    Ok(body) => {
+                        status.set(AuthStatus::Verified);
+                        token.set(body.token);
                     }
-                }
+                    Err(e) => status.set(AuthStatus::Error(format!("Bad JSON: {e}").into())),
+                },
                 reqwest::StatusCode::TOO_MANY_REQUESTS => {
                     status.set(AuthStatus::Error(format!("Too many get code request")));
                 }

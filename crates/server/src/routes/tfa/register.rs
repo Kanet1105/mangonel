@@ -1,11 +1,11 @@
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::routes::error::ApiError;
 use crate::routes::tfa::AppState;
-use crate::services::tfa::{send_email_code, EmailRequest, TFAError, TFAResponse};
+use crate::services::tfa::{send_email_code, EmailRequest, TFAResponse};
 
 #[derive(Serialize, Deserialize)]
 pub struct RegisterRequest {
@@ -13,23 +13,8 @@ pub struct RegisterRequest {
 }
 
 #[derive(Serialize, Default)]
-pub struct RegisterResponse {
-    cooldown: Option<u16>,
-}
-
-impl IntoResponse for RegisterResponse {
-    fn into_response(self) -> axum::response::Response {
-        let body = axum::Json(self);
-        (StatusCode::OK, body).into_response()
-    }
-}
-
-impl RegisterResponse {
-    pub fn new(cooldown: u16) -> Self {
-        RegisterResponse {
-            cooldown: Some(cooldown),
-        }
-    }
+pub struct RegisterSuccess {
+    pub cooldown: Option<u16>,
 }
 
 pub async fn register(
@@ -47,29 +32,9 @@ pub async fn register(
                 .await;
             });
 
-            (StatusCode::OK, RegisterResponse::default())
+            Ok(Json(RegisterSuccess { cooldown: None }))
         }
-        Some(TFAResponse::Error(error)) => match error {
-            TFAError::TooManyRegisterRequests(time) => (
-                StatusCode::TOO_MANY_REQUESTS,
-                RegisterResponse::new(time as u16),
-            ),
-            TFAError::CodeExpired => (
-                StatusCode::NOT_FOUND,
-                RegisterResponse { cooldown: Some(0) },
-            ),
-            _ => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                RegisterResponse::default(),
-            ),
-        },
-        Some(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            RegisterResponse::default(),
-        ),
-        None => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            RegisterResponse::default(),
-        ),
+        Some(TFAResponse::Error(error)) => Err(ApiError::from(error)),
+        _ => Err(ApiError::Internal),
     }
 }

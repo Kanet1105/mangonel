@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq)]
 enum LoginState {
@@ -117,10 +117,19 @@ struct LoginRequest {
     password: String,
 }
 
-#[derive(Deserialize, Debug)]
-struct LoginResponse {
-    status: String,
-    email: Option<String>,
+#[derive(serde::Deserialize)]
+struct LoginSuccess {
+    email: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "error", content = "message")]
+pub enum ApiError {
+    Unauthorized(Option<String>),
+    TooManyRegisterRequests(Option<u16>),
+    TooManyGetTokenRequests,
+    NotFound,
+    Internal,
 }
 
 fn handle_login(
@@ -146,22 +155,29 @@ fn handle_login(
             .await;
 
         match res {
-            Ok(response) => {
-                if !response.status().is_success() {
+            Ok(response) => match response.status() {
+                reqwest::StatusCode::OK => match response.json::<LoginSuccess>().await {
+                    Ok(body) => {
+                        login_state.set(LoginState::Idle);
+                        on_success.call(body.email);
+                    }
+                    Err(_) => {
+                        login_state.set(LoginState::Failure);
+                    }
+                },
+                reqwest::StatusCode::TOO_MANY_REQUESTS => {
                     login_state.set(LoginState::Failure);
                     return;
                 }
-
-                match response.json::<LoginResponse>().await {
-                    Ok(body) if body.status == "Ok" => {
-                        login_state.set(LoginState::Idle);
-                        on_success.call(body.email.unwrap());
-                    }
-                    _ => {
-                        login_state.set(LoginState::Failure);
-                    }
+                reqwest::StatusCode::NOT_FOUND => {
+                    login_state.set(LoginState::Failure);
+                    return;
                 }
-            }
+                _ => {
+                    login_state.set(LoginState::Failure);
+                    return;
+                }
+            },
             Err(_) => {
                 login_state.set(LoginState::Failure);
             }

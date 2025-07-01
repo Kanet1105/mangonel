@@ -1,11 +1,11 @@
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::routes::error::ApiError;
 use crate::routes::tfa::AppState;
-use crate::services::tfa::{TFAError, TFAResponse};
+use crate::services::tfa::TFAResponse;
 
 #[derive(Serialize, Deserialize)]
 pub struct VerifyCodeRequest {
@@ -14,44 +14,8 @@ pub struct VerifyCodeRequest {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(tag = "status", content = "data")]
-pub enum VerifyCodeResponse {
-    Ok {
-        token: String,
-    },
-    Error {
-        kind: ErrorKind,
-        message: Option<String>,
-    },
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum ErrorKind {
-    TooManyRequests,
-    NotFound,
-    InvalidCode,
-    Internal,
-}
-
-impl IntoResponse for VerifyCodeResponse {
-    fn into_response(self) -> Response {
-        match self {
-            VerifyCodeResponse::Ok { token } => {
-                let body = Json(VerifyCodeResponse::Ok { token });
-                (StatusCode::OK, body).into_response()
-            }
-            VerifyCodeResponse::Error { kind, message } => {
-                let status = match kind {
-                    ErrorKind::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
-                    ErrorKind::NotFound => StatusCode::NOT_FOUND,
-                    ErrorKind::InvalidCode => StatusCode::UNAUTHORIZED,
-                    ErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
-                };
-                let body = Json(VerifyCodeResponse::Error { kind, message });
-                (status, body).into_response()
-            }
-        }
-    }
+pub struct VerifyCodeSuccess {
+    token: String,
 }
 
 pub async fn verify_and_issue_token(
@@ -63,41 +27,8 @@ pub async fn verify_and_issue_token(
         .verify_and_issue_token(payload.email, payload.code);
 
     match receiver.recv().await {
-        Some(TFAResponse::Token(token)) => (StatusCode::OK, Json(VerifyCodeResponse::Ok { token })),
-        Some(TFAResponse::Error(TFAError::InvalidCode)) => (
-            StatusCode::UNAUTHORIZED,
-            Json(VerifyCodeResponse::Error {
-                kind: ErrorKind::InvalidCode,
-                message: None,
-            }),
-        ),
-        Some(TFAResponse::Error(TFAError::NotFound)) => (
-            StatusCode::NOT_FOUND,
-            Json(VerifyCodeResponse::Error {
-                kind: ErrorKind::NotFound,
-                message: None,
-            }),
-        ),
-        Some(TFAResponse::Error(TFAError::TooManyGetTokenRequests)) => (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(VerifyCodeResponse::Error {
-                kind: ErrorKind::TooManyRequests,
-                message: None,
-            }),
-        ),
-        Some(TFAResponse::Error(TFAError::CodeExpired)) => (
-            StatusCode::UNAUTHORIZED,
-            Json(VerifyCodeResponse::Error {
-                kind: ErrorKind::InvalidCode,
-                message: Some("Code expired".to_string()),
-            }),
-        ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(VerifyCodeResponse::Error {
-                kind: ErrorKind::Internal,
-                message: None,
-            }),
-        ),
+        Some(TFAResponse::Token(token)) => Ok(Json(VerifyCodeSuccess { token })),
+        Some(TFAResponse::Error(err)) => Err(ApiError::from(err)),
+        _ => Err(ApiError::Internal),
     }
 }
