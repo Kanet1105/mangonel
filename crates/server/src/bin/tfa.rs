@@ -1,12 +1,8 @@
 use std::sync::Arc;
 
-use api::{
-    routes::{
-        common::health_router,
-        tfa::{tfa_router, AppState},
-    },
-    services::tfa::TFAService,
-};
+use server::routes::common::health_router;
+use server::routes::tfa::{tfa_router, AppState};
+use server::services::tfa::TFAService;
 use tower_http::cors::{Any, CorsLayer};
 
 const TFA_SERVER_BINDING: &str = "0.0.0.0:3002";

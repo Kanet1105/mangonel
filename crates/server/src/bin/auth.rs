@@ -1,5 +1,5 @@
-use api::routes::auth::auth_router;
-use api::routes::common::health_router;
+use server::routes::auth::auth_router;
+use server::routes::common::health_router;
 use tower_http::cors::{Any, CorsLayer};
 
 const AUTH_SERVER_BINDING: &str = "0.0.0.0:3001";

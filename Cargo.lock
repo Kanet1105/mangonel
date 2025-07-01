@@ -45,21 +45,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "api"
-version = "0.1.0"
-dependencies = [
- "axum",
- "lettre",
- "rand 0.9.1",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tower-http",
- "uuid",
-]
-
-[[package]]
 name = "ashpd"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4598,6 +4583,21 @@ dependencies = [
  "itoa 1.0.15",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "lettre",
+ "rand 0.9.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "uuid",
 ]
 
 [[package]]

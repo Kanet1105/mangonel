@@ -1,5 +1,5 @@
-use crate::services::auth;
-use axum::{response::IntoResponse, routing::post, Json, Router};
+use axum::response::IntoResponse;
+use axum::Json;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -15,12 +15,8 @@ pub struct LoginResponse {
     email: Option<String>,
 }
 
-pub fn auth_router() -> Router {
-    Router::new().route("/login", post(login_handler))
-}
-
-pub async fn login_handler(Json(payload): Json<LoginRequest>) -> impl IntoResponse {
-    match auth::login(&payload.email, &payload.password) {
+pub async fn login(Json(payload): Json<LoginRequest>) -> impl IntoResponse {
+    match crate::services::auth::login(&payload.email, &payload.password) {
         Ok(email) => {
             if !is_tfa_server_healthy().await {
                 return (

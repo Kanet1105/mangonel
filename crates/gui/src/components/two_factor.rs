@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -8,8 +8,8 @@ enum AuthStatus {
     Sent,
     Sending,
     Timeout,
-    Error(String),
     Verified,
+    Error(String),
 }
 
 #[derive(Props, PartialEq, Clone)]
@@ -201,7 +201,7 @@ fn trigger_send_code(
                 }
                 Ok(IsRateLimited::RateLimited(cooldown)) => {
                     status.set(AuthStatus::Error(format!(
-                        "Rate limited. Please wait below time"
+                        "Rate limited. Please wait below"
                     )));
                     countdown.set(cooldown);
 
@@ -275,6 +275,26 @@ struct VerifyCodeRequest {
     code: u32,
 }
 
+#[derive(Serialize, Deserialize)]
+pub enum ErrorKind {
+    TooManyRequests,
+    NotFound,
+    InvalidCode,
+    Internal,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "status", content = "data")]
+pub enum VerifyCodeResponse {
+    Ok {
+        token: String,
+    },
+    Error {
+        kind: ErrorKind,
+        message: Option<String>,
+    },
+}
+
 fn on_submit_handler(
     email: Signal<String>,
     code_input: Signal<String>,
@@ -301,38 +321,44 @@ fn on_submit_handler(
 
             match res.status() {
                 reqwest::StatusCode::OK => {
-                    let body: serde_json::Value = res.json().await.unwrap();
-                    if let Some(token_str) = body.get("token").and_then(|v| v.as_str()) {
-                        token.set(token_str.to_string());
-                        status.set(AuthStatus::Verified);
-                    } else {
-                        status.set(AuthStatus::Error("No token received".into()));
+                    let res = res.json::<VerifyCodeResponse>().await;
+
+                    match res {
+                        Ok(res) => match res {
+                            VerifyCodeResponse::Ok { token: t } => {
+                                status.set(AuthStatus::Verified);
+                                token.set(t);
+                            }
+                            VerifyCodeResponse::Error { kind, message } => {
+                                let msg = match kind {
+                                    ErrorKind::TooManyRequests => {
+                                        "Too many requests. Please try again later."
+                                    }
+                                    ErrorKind::NotFound => "Email not registered.",
+                                    ErrorKind::InvalidCode => "Invalid verification code.",
+                                    ErrorKind::Internal => "Internal server error.",
+                                };
+                                status.set(AuthStatus::Error(format!("Error: {msg}").into()));
+                            }
+                        },
+                        Err(e) => {
+                            status.set(AuthStatus::Error(format!("No token received. {e}").into()));
+                        }
                     }
                 }
+                reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                    status.set(AuthStatus::Error(format!("Too many get code request")));
+                }
+                reqwest::StatusCode::NOT_FOUND => {
+                    status.set(AuthStatus::Error("Email not registered".into()));
+                }
+                reqwest::StatusCode::UNAUTHORIZED => {
+                    status.set(AuthStatus::Error("Invalid verification code".into()));
+                }
                 _ => {
-                    status.set(AuthStatus::Error("Failed to verify code".into()));
+                    status.set(AuthStatus::Error("Internal Server Error".into()));
                 }
             }
-
-            // match res {
-            //     Ok(resp) => {
-            //         if let Ok(json) = resp.json::<serde_json::Value>().await {
-            //             if json.get("status") == Some(&serde_json::Value::String("ok".into())) {
-            //                 if let Some(token_str) = json.get("token").and_then(|t| t.as_str()) {
-            //                     token.set(token_str.to_string());
-            //                     status.set(AuthStatus::Verified);
-            //                 } else {
-            //                     status.set(AuthStatus::Error("No token received".into()));
-            //                 }
-            //             } else {
-            //                 status.set(AuthStatus::Error("Invalid code".into()));
-            //             }
-            //         } else {
-            //             status.set(AuthStatus::Error("Invalid response".into()));
-            //         }
-            //     }
-            //     Err(_) => status.set(AuthStatus::Error("Request failed".into())),
-            // }
         });
     }
 }

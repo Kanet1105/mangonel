@@ -18,6 +18,7 @@ fn get_user_file_path() -> PathBuf {
     let data_dir = project_root.join(RELATIVE_DATA_PATH);
 
     if !data_dir.exists() {
+        eprintln!("Data directory does not exist, creating: {:?}", data_dir);
         create_dir_all(&data_dir).expect("Failed to create data directory");
     }
 
@@ -27,19 +28,18 @@ fn get_user_file_path() -> PathBuf {
 #[derive(Serialize, Deserialize)]
 pub struct Users(pub HashMap<String, String>);
 
-fn load_users() -> HashMap<String, String> {
+fn load_users() -> Result<HashMap<String, String>, String> {
     let path = get_user_file_path();
 
-    println!("Loading users from: {:?}", path);
     if !path.exists() {
         save_users(&HashMap::new());
-        return HashMap::new();
+        return Err("User file not found, created a new one.".into());
     }
 
-    read_to_string(path)
+    Ok(read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 fn save_users(users: &HashMap<String, String>) {
@@ -49,7 +49,7 @@ fn save_users(users: &HashMap<String, String>) {
 }
 
 pub fn register(email: &str, password: &str) -> Result<(), String> {
-    let mut users = load_users();
+    let mut users = load_users().unwrap();
     if users.contains_key(email) {
         return Err("User already exists".into());
     }
@@ -59,7 +59,7 @@ pub fn register(email: &str, password: &str) -> Result<(), String> {
 }
 
 pub fn login(email: &str, password: &str) -> Result<String, String> {
-    let users = load_users();
+    let users = load_users().unwrap();
     match users.get(email) {
         Some(stored) if stored == password => Ok(email.to_string()),
         _ => Err("Invalid credentials".into()),

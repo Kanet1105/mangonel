@@ -1,4 +1,5 @@
-use axum::{routing::get, Json, Router};
+use axum::routing::get;
+use axum::{Json, Router};
 use serde::Serialize;
 
 #[derive(Serialize)]

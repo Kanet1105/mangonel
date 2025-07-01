@@ -4,7 +4,7 @@ members = [
     "crates/libxdp",
     "crates/libxdp-sys",
     "crates/gui",
-    "crates/api",
+    "crates/server",
 ]
 resolver = "2"
 

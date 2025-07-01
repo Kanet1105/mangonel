@@ -1,16 +1,15 @@
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Instant;
+
 use axum::Json;
 use lettre::message::Mailbox;
 use lettre::transport::smtp::response::Response;
 use lettre::transport::smtp::Error;
-use lettre::Message;
-use lettre::SmtpTransport;
-use lettre::Transport;
+use lettre::{Message, SmtpTransport, Transport};
 use serde::Deserialize;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
-use std::{collections::HashMap, time::Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
 
@@ -70,11 +69,19 @@ pub enum TFARequest {
 #[derive(Clone, Debug)]
 pub enum TFAResponse {
     Registered(u32),
-    CodeExpired,
     Deregistered,
     Token(String),
+    Error(TFAError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TFAError {
     TooManyRegisterRequests(u64),
     TooManyGetTokenRequests,
+    CodeExpired,
+    InvalidCode,
+    NotFound,
+    Error(String),
 }
 
 pub struct TFAStorage {
@@ -113,7 +120,9 @@ impl TFAStorage {
 
                         if remaining_cooldown != 0 {
                             sender
-                                .send(TFAResponse::TooManyRegisterRequests(remaining_cooldown))
+                                .send(TFAResponse::Error(TFAError::TooManyRegisterRequests(
+                                    remaining_cooldown,
+                                )))
                                 .unwrap();
 
                             return;
@@ -144,18 +153,23 @@ impl TFAStorage {
             TFARequest::VerifyAndIssueToken(key, tfa_code, sender) => {
                 if let Some(value) = self.storage.get_mut(&key) {
                     if value.code() != tfa_code {
-                        return sender.send(TFAResponse::CodeExpired).unwrap();
+                        return sender
+                            .send(TFAResponse::Error(TFAError::InvalidCode))
+                            .unwrap();
                     }
 
                     if value.too_many_register_requests() {
                         return sender
-                            .send(TFAResponse::TooManyRegisterRequests(KEY_TIMEOUT))
+                            .send(TFAResponse::Error(TFAError::TooManyRegisterRequests(
+                                KEY_TIMEOUT,
+                            )))
                             .unwrap();
                     }
 
                     if value.is_code_expired() {
-                        sender.send(TFAResponse::CodeExpired).unwrap();
-                        return;
+                        return sender
+                            .send(TFAResponse::Error(TFAError::CodeExpired))
+                            .unwrap();
                     }
 
                     if let Ok(token_version) = value.token_version.next_version() {
@@ -163,21 +177,33 @@ impl TFAStorage {
                             value.set_token(Uuid::new_v4().to_string());
                         }
                     } else {
-                        return sender.send(TFAResponse::TooManyGetTokenRequests).unwrap();
+                        return sender
+                            .send(TFAResponse::Error(TFAError::TooManyGetTokenRequests))
+                            .unwrap();
                     }
 
                     sender
                         .send(TFAResponse::Token(value.token().cloned().unwrap()))
                         .unwrap();
                 } else {
-                    sender.send(TFAResponse::CodeExpired).unwrap();
+                    sender.send(TFAResponse::Error(TFAError::NotFound)).unwrap();
                 }
             }
         }
     }
 
     fn flush_expired_keys(&mut self) {
-        self.storage.retain(|_key, value| !value.is_code_expired());
+        self.storage.retain(|_key, value| {
+            if value.time_elapsed_since_creation() > KEY_TIMEOUT {
+                false
+            } else {
+                if value.is_code_expired() {
+                    value.token = None;
+                    value.token_version = TokenVersion::None;
+                }
+                true
+            }
+        });
     }
 }
 
