@@ -122,16 +122,6 @@ struct LoginSuccess {
     email: String,
 }
 
-#[derive(serde::Deserialize)]
-#[serde(tag = "error", content = "message")]
-pub enum ApiError {
-    Unauthorized(Option<String>),
-    TooManyRegisterRequests(Option<u16>),
-    TooManyGetTokenRequests,
-    NotFound,
-    Internal,
-}
-
 fn handle_login(
     id: Signal<String>,
     password: Signal<String>,

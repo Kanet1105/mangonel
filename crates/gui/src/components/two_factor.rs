@@ -281,16 +281,6 @@ struct VerifyCodeSuccess {
     token: String,
 }
 
-#[derive(serde::Deserialize)]
-#[serde(tag = "error", content = "message")]
-pub enum ApiError {
-    Unauthorized(Option<String>),
-    TooManyRegisterRequests(Option<u16>),
-    TooManyGetTokenRequests,
-    NotFound,
-    Internal,
-}
-
 fn on_submit_handler(
     email: Signal<String>,
     code_input: Signal<String>,

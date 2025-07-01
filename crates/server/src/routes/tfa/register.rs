@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::routes::error::ApiError;
 use crate::routes::tfa::AppState;
-use crate::services::tfa::{send_email_code, EmailRequest, TFAResponse};
-
+use crate::services::tfa::smtp::{send_email_code, EmailRequest};
+use crate::services::tfa::TFAResponse;
 #[derive(Serialize, Deserialize)]
 pub struct RegisterRequest {
     pub email: String,
