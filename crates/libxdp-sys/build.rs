@@ -2,8 +2,10 @@ use std::{env, path::PathBuf};
 
 use bindgen::Builder;
 
-const LIB_NAME: &str = "libxdp";
-const LIB_VERSION: &str = "1.4";
+const LIBBPF_PATH: &str = "xdp-tools/lib/libbpf/src";
+const LIBBPF: &str = "bpf";
+const LIBXDP_PATH: &str = "xdp-tools/lib/libxdp";
+const LIBXDP: &str = "xdp";
 const WRAPPER: &str = "wrapper.h";
 
 fn check_os() {
@@ -12,23 +14,13 @@ fn check_os() {
     }
 }
 
-/// Link a library by its name and version.
-///
-/// # Panics
-///
-/// Panics either when the program fails to find the library in the
-/// default system library path or when the installed library version
-/// does not satisfy the minimum version given by "version" parameter.
-fn link_library(name: &str, version: &str) {
-    pkg_config::Config::new()
-        .atleast_version(version)
-        .probe(name)
-        .unwrap_or_else(|error| panic!("Failed to link the library: {}", error));
-}
-
 fn main() {
     check_os();
-    link_library(LIB_NAME, LIB_VERSION);
+    println!("cargo::rustc-link-search={}", LIBBPF_PATH);
+    println!("cargo::rustc-link-lib=static={}", LIBBPF);
+    println!("cargo::rustc-link-search={}", LIBXDP_PATH);
+    println!("cargo::rustc-link-lib=static={}", LIBXDP);
+    println!("cargo::rerun-if-changed={}", WRAPPER);
 
     let bindings = Builder::default()
         .header(WRAPPER)
@@ -38,6 +30,7 @@ fn main() {
         .expect("Unable to generate bindings");
 
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    println!("{:?}", out_path);
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Failed to write bindings");
