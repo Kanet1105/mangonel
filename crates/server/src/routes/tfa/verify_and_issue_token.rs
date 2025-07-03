@@ -1,11 +1,9 @@
-use axum::extract::State;
-use axum::response::IntoResponse;
-use axum::Json;
+use crate::{
+    routes::{error::ApiError, tfa::AppState},
+    services::tfa::TFAResponse,
+};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
-
-use crate::routes::error::ApiError;
-use crate::routes::tfa::AppState;
-use crate::services::tfa::TFAResponse;
 
 #[derive(Serialize, Deserialize)]
 pub struct VerifyCodeRequest {

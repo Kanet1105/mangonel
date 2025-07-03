@@ -1,7 +1,5 @@
-use axum::routing::post;
-use axum::Router;
-
 use crate::routes::auth::login::login;
+use axum::{routing::post, Router};
 
 pub mod login;
 

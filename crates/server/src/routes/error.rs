@@ -1,11 +1,13 @@
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
+use crate::{
+    routes::tfa::register::RegisterSuccess,
+    services::{auth::AuthError, tfa::TFAError},
+};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde::Serialize;
-
-use crate::routes::tfa::register::RegisterSuccess;
-use crate::services::auth::AuthError;
-use crate::services::tfa::TFAError;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "error", content = "message")]

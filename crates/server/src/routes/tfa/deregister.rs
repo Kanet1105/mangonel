@@ -1,12 +1,12 @@
-use axum::extract::State;
-use axum::response::IntoResponse;
-use axum::Json;
+use crate::{
+    routes::{
+        error::ApiError,
+        tfa::{register::RegisterRequest, AppState},
+    },
+    services::tfa::TFAResponse,
+};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde::Serialize;
-
-use crate::routes::error::ApiError;
-use crate::routes::tfa::register::RegisterRequest;
-use crate::routes::tfa::AppState;
-use crate::services::tfa::TFAResponse;
 
 #[derive(Serialize)]
 pub struct DeregisterSuccess;

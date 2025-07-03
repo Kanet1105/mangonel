@@ -1,10 +1,9 @@
 use axum::Json;
-use lettre::message::Mailbox;
-use lettre::transport::smtp::response::Response;
-use lettre::transport::smtp::Error;
-use lettre::Message;
-use lettre::SmtpTransport;
-use lettre::Transport;
+use lettre::{
+    message::Mailbox,
+    transport::smtp::{response::Response, Error},
+    Message, SmtpTransport, Transport,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

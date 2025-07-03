@@ -1,14 +1,8 @@
-use axum::routing::get;
-use axum::{Json, Router};
-use serde::Serialize;
+use axum::{routing::get, Router};
+use reqwest::StatusCode;
 
-#[derive(Serialize)]
-struct HealthResponse {
-    status: &'static str,
-}
-
-async fn health_handler() -> Json<HealthResponse> {
-    Json(HealthResponse { status: "ok" })
+async fn health_handler() -> StatusCode {
+    StatusCode::OK
 }
 
 pub fn health_router() -> Router {

@@ -1,8 +1,9 @@
-use std::collections::HashMap;
-use std::fs::{create_dir_all, read_to_string, write};
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    fs::{create_dir_all, read_to_string, write},
+    path::PathBuf,
+};
 
 const RELATIVE_DATA_PATH: &str = "data";
 const USER_FILE: &str = "users.json";

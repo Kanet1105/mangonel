@@ -1,12 +1,12 @@
-use axum::extract::State;
-use axum::response::IntoResponse;
-use axum::Json;
+use crate::{
+    routes::{error::ApiError, tfa::AppState},
+    services::tfa::{
+        smtp::{send_email_code, EmailRequest},
+        TFAResponse,
+    },
+};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
-
-use crate::routes::error::ApiError;
-use crate::routes::tfa::AppState;
-use crate::services::tfa::smtp::{send_email_code, EmailRequest};
-use crate::services::tfa::TFAResponse;
 #[derive(Serialize, Deserialize)]
 pub struct RegisterRequest {
     pub email: String,

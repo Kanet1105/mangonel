@@ -1,12 +1,11 @@
+use crate::{
+    routes::tfa::{
+        deregister::deregister, register::register, verify_and_issue_token::verify_and_issue_token,
+    },
+    services::tfa::TFAService,
+};
+use axum::{routing::post, Router};
 use std::sync::Arc;
-
-use axum::routing::post;
-use axum::Router;
-
-use crate::routes::tfa::deregister::deregister;
-use crate::routes::tfa::register::register;
-use crate::routes::tfa::verify_and_issue_token::verify_and_issue_token;
-use crate::services::tfa::TFAService;
 
 pub mod deregister;
 pub mod register;

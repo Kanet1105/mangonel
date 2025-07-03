@@ -1,8 +1,6 @@
-use axum::response::IntoResponse;
-use axum::Json;
-use serde::{Deserialize, Serialize};
-
 use crate::routes::error::ApiError;
+use axum::{response::IntoResponse, Json};
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -19,6 +17,7 @@ pub async fn login(Json(payload): Json<LoginRequest>) -> impl IntoResponse {
     match crate::services::auth::login(&payload.email, &payload.password) {
         Ok(email) => {
             if !is_tfa_server_healthy().await {
+                eprintln!("TFA server is not healthy, returning internal error");
                 return Err(Json(ApiError::Internal));
             }
 

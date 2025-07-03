@@ -1,7 +1,6 @@
-use std::time::Duration;
-
 use dioxus::prelude::*;
 use serde::Serialize;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
 enum AuthStatus {
