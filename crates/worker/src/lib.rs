@@ -1,6 +1,5 @@
-use std::thread::{self, JoinHandle};
-
 use core_affinity::CoreId;
+use std::thread::{self, JoinHandle};
 
 /// Spawns a worker thread pinned to the specific core by core ID.
 ///

@@ -1,16 +1,14 @@
+use crate::{
+    mmap::Mmap,
+    ring_buffer::{CompletionRing, FillRing, RingError},
+};
+use mangonel_libxdp_sys::{
+    xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
+};
 use std::{
     ffi::c_void,
     ptr::{null_mut, NonNull},
     sync::Arc,
-};
-
-use mangonel_libxdp_sys::{
-    xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
-};
-
-use crate::{
-    mmap::Mmap,
-    ring_buffer::{CompletionRing, FillRing, RingError},
 };
 
 #[derive(Debug)]

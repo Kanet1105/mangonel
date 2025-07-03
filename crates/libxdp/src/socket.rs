@@ -1,16 +1,3 @@
-use std::{
-    ffi::{CString, NulError},
-    ptr::{null_mut, NonNull},
-    sync::Arc,
-};
-
-use libc::{poll, pollfd, sendto, MSG_DONTWAIT, POLLIN};
-use mangonel_libxdp_sys::{
-    xsk_socket, xsk_socket__create, xsk_socket__delete, xsk_socket__fd, xsk_socket_config,
-    xsk_socket_config__bindgen_ty_1, XDP_COPY, XDP_ZEROCOPY, XSK_RING_PROD__DEFAULT_NUM_DESCS,
-    XSK_UMEM__DEFAULT_FRAME_HEADROOM, XSK_UMEM__DEFAULT_FRAME_SIZE,
-};
-
 use crate::{
     descriptor::Descriptor,
     mmap::{Mmap, MmapError},
@@ -20,6 +7,17 @@ use crate::{
     },
     umem::{Umem, UmemError},
     util,
+};
+use libc::{poll, pollfd, sendto, MSG_DONTWAIT, POLLIN};
+use mangonel_libxdp_sys::{
+    xsk_socket, xsk_socket__create, xsk_socket__delete, xsk_socket__fd, xsk_socket_config,
+    xsk_socket_config__bindgen_ty_1, XDP_COPY, XDP_ZEROCOPY, XSK_RING_PROD__DEFAULT_NUM_DESCS,
+    XSK_UMEM__DEFAULT_FRAME_HEADROOM, XSK_UMEM__DEFAULT_FRAME_SIZE,
+};
+use std::{
+    ffi::{CString, NulError},
+    ptr::{null_mut, NonNull},
+    sync::Arc,
 };
 
 #[derive(Debug)]

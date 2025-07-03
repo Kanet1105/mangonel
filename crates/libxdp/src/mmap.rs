@@ -1,10 +1,9 @@
+use libc::{
+    mmap, munmap, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_PRIVATE, PROT_READ, PROT_WRITE,
+};
 use std::{
     ffi::c_void,
     ptr::{null_mut, NonNull},
-};
-
-use libc::{
-    mmap, munmap, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_PRIVATE, PROT_READ, PROT_WRITE,
 };
 
 #[derive(Debug)]

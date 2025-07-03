@@ -1,3 +1,9 @@
+use crate::util::is_power_of_two;
+use mangonel_libxdp_sys::{
+    xdp_desc, xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release,
+    xsk_ring_cons__rx_desc, xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve,
+    xsk_ring_prod__submit, xsk_ring_prod__tx_desc,
+};
 use std::{
     mem::MaybeUninit,
     ptr::NonNull,
@@ -6,14 +12,6 @@ use std::{
         Arc,
     },
 };
-
-use mangonel_libxdp_sys::{
-    xdp_desc, xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release,
-    xsk_ring_cons__rx_desc, xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve,
-    xsk_ring_prod__submit, xsk_ring_prod__tx_desc,
-};
-
-use crate::util::is_power_of_two;
 
 pub trait BufferWriter<T: Copy> {
     fn available(&self, size: u32) -> (u32, u32);

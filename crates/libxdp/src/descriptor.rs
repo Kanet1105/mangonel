@@ -1,6 +1,5 @@
-use mangonel_libxdp_sys::xdp_desc;
-
 use crate::umem::Umem;
+use mangonel_libxdp_sys::xdp_desc;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Descriptor {
