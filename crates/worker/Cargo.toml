@@ -1,5 +1,5 @@
 [package]
-name = "mangonel-libxdp-sys"
+name = "worker"
 version = "0.1.0"
 authors.workspace = true
 license.workspace = true
@@ -9,3 +9,6 @@ rust-version.workspace = true
 [build-dependencies]
 bindgen = "0.69"
 pkg-config = "0.3"
+
+[dependencies]
+core_affinity = "0.8.3"
