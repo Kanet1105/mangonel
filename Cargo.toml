@@ -1,5 +1,11 @@
 [workspace]
-members = ["mangonel", "crates/libxdp", "crates/libxdp-sys", "crates/worker"]
+members = [
+    "mangonel",
+    "crates/libxdp",
+    "crates/libxdp-sys",
+    "crates/worker",
+    "crates/data-plane",
+]
 resolver = "2"
 
 [workspace.package]
@@ -9,6 +15,10 @@ edition = "2021"
 rust-version = "1.84"
 
 [workspace.dependencies]
+mangonel-data-plane = { path = "crates/data-plane" }
 mangonel-libxdp = { path = "crates/libxdp" }
 mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
 mangonel-worker = { path = "crates/worker" }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false }
