@@ -1,7 +1,7 @@
 use crate::{
     descriptor::Descriptor,
     mmap::{Mmap, MmapError},
-    ring_buffer::{
+    ring::{
         BufferReader, BufferWriter, CompletionRing, FillRing, RingBuffer, RingBufferReader,
         RingBufferWriter, RingError, RxRing, TxRing,
     },
@@ -49,7 +49,7 @@ impl SocketBuilder {
         self,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(TxSocket, RxSocket), SocketError> {
+    ) -> Result<(SocketSender, SocketReceiver), SocketError> {
         Socket::init(
             self.frame_size,
             self.frame_headroom_size,
@@ -99,7 +99,7 @@ impl Socket {
         force_zero_copy: bool,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(TxSocket, RxSocket), SocketError> {
+    ) -> Result<(SocketSender, SocketReceiver), SocketError> {
         util::setrlimit();
 
         let length = (frame_size + frame_headroom_size) * ring_size;
@@ -161,8 +161,8 @@ impl Socket {
         let (buffer_writer, buffer_reader) =
             RingBuffer::from_vec(prefilled_buffer).map_err(SocketError::Ring)?;
 
-        let tx_socket = TxSocket::new(socket.clone(), completion_ring, tx_ring, buffer_writer);
-        let rx_socket = RxSocket::new(socket, fill_ring, rx_ring, buffer_reader);
+        let tx_socket = SocketSender::new(socket.clone(), completion_ring, tx_ring, buffer_writer);
+        let rx_socket = SocketReceiver::new(socket, fill_ring, rx_ring, buffer_reader);
 
         Ok((tx_socket, rx_socket))
     }
@@ -171,98 +171,21 @@ impl Socket {
     pub fn socket_fd(&self) -> i32 {
         unsafe { xsk_socket__fd(self.inner.socket.as_ptr()) }
     }
-}
-
-pub struct TxSocket {
-    socket: Socket,
-    completion_ring: CompletionRing,
-    tx_ring: TxRing,
-    buffer_writer: RingBufferWriter<u64>,
-}
-
-impl TxSocket {
-    fn new(
-        socket: Socket,
-        completion_ring: CompletionRing,
-        tx_ring: TxRing,
-        buffer_writer: RingBufferWriter<u64>,
-    ) -> Self {
-        Self {
-            socket,
-            completion_ring,
-            tx_ring,
-            buffer_writer,
-        }
-    }
 
     #[inline(always)]
-    fn send(&mut self) {
-        unsafe {
-            sendto(
-                self.socket.socket_fd(),
-                null_mut(),
-                0,
-                MSG_DONTWAIT,
-                null_mut(),
-                0,
-            )
-        };
-    }
-
-    #[inline(always)]
-    fn complete(&mut self, size: u32) -> u32 {
-        let (filled, reader_index) = self.completion_ring.filled(size);
-        let (available, writer_index) = self.buffer_writer.available(filled);
-
-        if available > 0 {
-            for offset in 0..available {
-                let data = self.completion_ring.get(reader_index + offset);
-                let empty = self.buffer_writer.get_mut(writer_index + offset);
-                *empty = *data;
-            }
-            self.buffer_writer.advance_index(available);
-            self.completion_ring.advance_index(available);
-
-            filled
-        } else {
-            0
-        }
-    }
-
-    #[inline(always)]
-    pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
-        let (available, index) = self.tx_ring.available(buffer.len() as u32);
-
-        if available > 0 {
-            for offset in 0..available {
-                let data = self.tx_ring.get_mut(index + offset);
-                data.addr = buffer[offset as usize].address();
-                data.len = buffer[offset as usize].length();
-            }
-            self.tx_ring.advance_index(available);
-            self.send();
-            self.complete(self.socket.inner.umem.umem_config().comp_size);
-
-            available
-        } else {
-            0
-        }
-    }
-
-    #[inline(always)]
-    pub fn umem(&self) -> Umem {
-        self.socket.inner.umem.clone()
+    pub fn umem(&self) -> &Umem {
+        &self.inner.umem
     }
 }
 
-pub struct RxSocket {
+pub struct SocketReceiver {
     socket: Socket,
     fill_ring: FillRing,
     rx_ring: RxRing,
     buffer_reader: RingBufferReader<u64>,
 }
 
-impl RxSocket {
+impl SocketReceiver {
     fn new(
         socket: Socket,
         fill_ring: FillRing,
@@ -299,7 +222,6 @@ impl RxSocket {
             }
             self.buffer_reader.advance_index(available);
             self.fill_ring.advance_index(available);
-
             available
         } else {
             0
@@ -307,19 +229,73 @@ impl RxSocket {
     }
 
     #[inline(always)]
-    pub fn read(&mut self, buffer: &mut [Descriptor], burst_size: u32) -> u32 {
-        self.poll();
+    pub fn read(&mut self, buffer: &mut [Descriptor]) -> u32 {
         self.fill(self.socket.inner.umem.umem_config().fill_size);
-        let (filled, index) = self.rx_ring.filled(burst_size);
+        self.poll();
 
+        let (filled, index) = self.rx_ring.filled(buffer.len() as u32);
         if filled > 0 {
             for offset in 0..filled {
                 let descriptor_ref = self.rx_ring.get(index + offset);
-                let descriptor = Descriptor::from(descriptor_ref);
+                let descriptor = Descriptor::new(descriptor_ref, self.socket.umem());
                 buffer[offset as usize] = descriptor;
             }
             self.rx_ring.advance_index(filled);
+            filled
+        } else {
+            0
+        }
+    }
+}
 
+pub struct SocketSender {
+    socket: Socket,
+    completion_ring: CompletionRing,
+    tx_ring: TxRing,
+    buffer_writer: RingBufferWriter<u64>,
+}
+
+impl SocketSender {
+    fn new(
+        socket: Socket,
+        completion_ring: CompletionRing,
+        tx_ring: TxRing,
+        buffer_writer: RingBufferWriter<u64>,
+    ) -> Self {
+        Self {
+            socket,
+            completion_ring,
+            tx_ring,
+            buffer_writer,
+        }
+    }
+
+    #[inline(always)]
+    fn send(&mut self) {
+        unsafe {
+            sendto(
+                self.socket.socket_fd(),
+                null_mut(),
+                0,
+                MSG_DONTWAIT,
+                null_mut(),
+                0,
+            )
+        };
+    }
+
+    #[inline(always)]
+    fn complete(&mut self, size: u32) -> u32 {
+        let (filled, reader_index) = self.completion_ring.filled(size);
+        let (available, writer_index) = self.buffer_writer.available(filled);
+        if available > 0 {
+            for offset in 0..available {
+                let data = self.completion_ring.get(reader_index + offset);
+                let empty = self.buffer_writer.get_mut(writer_index + offset);
+                *empty = *data;
+            }
+            self.completion_ring.advance_index(available);
+            self.buffer_writer.advance_index(available);
             filled
         } else {
             0
@@ -327,8 +303,22 @@ impl RxSocket {
     }
 
     #[inline(always)]
-    pub fn umem(&self) -> Umem {
-        self.socket.inner.umem.clone()
+    pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
+        let (available, index) = self.tx_ring.available(buffer.len() as u32);
+        if available > 0 {
+            for offset in 0..available {
+                let data = self.tx_ring.get_mut(index + offset);
+                data.addr = buffer[offset as usize].address;
+                data.len = buffer[offset as usize].length;
+            }
+            self.tx_ring.advance_index(available);
+
+            self.send();
+            self.complete(self.socket.umem().umem_config().comp_size);
+            available
+        } else {
+            0
+        }
     }
 }
 

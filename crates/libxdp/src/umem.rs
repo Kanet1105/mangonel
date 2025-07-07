@@ -1,6 +1,6 @@
 use crate::{
     mmap::Mmap,
-    ring_buffer::{CompletionRing, FillRing, RingError},
+    ring::{CompletionRing, FillRing, RingError},
 };
 use mangonel_libxdp_sys::{
     xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,

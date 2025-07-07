@@ -13,18 +13,20 @@ use std::{
     },
 };
 
-pub trait BufferWriter<T: Copy> {
-    fn available(&self, size: u32) -> (u32, u32);
+pub trait BufferReader<T: Copy> {
+    /// Returns the number of filled indices and the current index.
+    fn filled(&self, size: u32) -> (u32, u32);
 
-    fn get_mut(&mut self, index: u32) -> &mut T;
+    fn get(&self, index: u32) -> &T;
 
     fn advance_index(&mut self, offset: u32);
 }
 
-pub trait BufferReader<T: Copy> {
-    fn filled(&self, size: u32) -> (u32, u32);
+pub trait BufferWriter<T: Copy> {
+    /// Returns the number of available indices and the current index.
+    fn available(&self, size: u32) -> (u32, u32);
 
-    fn get(&self, index: u32) -> &T;
+    fn get_mut(&mut self, index: u32) -> &mut T;
 
     fn advance_index(&mut self, offset: u32);
 }
@@ -71,7 +73,6 @@ impl<T: Copy> RingBuffer<T> {
 
         let writer = RingBufferWriter::new(ring_buffer.clone());
         let reader = RingBufferReader::new(ring_buffer);
-
         Ok((writer, reader))
     }
 
@@ -90,7 +91,6 @@ impl<T: Copy> RingBuffer<T> {
 
         let writer = RingBufferWriter::new(ring_buffer.clone());
         let reader = RingBufferReader::new(ring_buffer);
-
         Ok((writer, reader))
     }
 
@@ -130,6 +130,43 @@ impl<T: Copy> RingBuffer<T> {
     }
 }
 
+pub struct RingBufferReader<T: Copy> {
+    ring_buffer: RingBuffer<T>,
+}
+
+impl<T: Copy> BufferReader<T> for RingBufferReader<T> {
+    #[inline(always)]
+    fn filled(&self, size: u32) -> (u32, u32) {
+        let head_index = self.ring_buffer.head_index();
+        let tail_index = self.ring_buffer.tail_index();
+
+        let filled = head_index.wrapping_sub(tail_index);
+        if filled > size {
+            (size, tail_index)
+        } else {
+            (filled, tail_index)
+        }
+    }
+
+    #[inline(always)]
+    fn get(&self, index: u32) -> &T {
+        let index = index % self.ring_buffer.capacity();
+        let ring_buffer = self.ring_buffer.buffer_ref();
+        ring_buffer.get(index as usize).unwrap()
+    }
+
+    #[inline(always)]
+    fn advance_index(&mut self, offset: u32) {
+        self.ring_buffer.advance_tail_index(offset);
+    }
+}
+
+impl<T: Copy> RingBufferReader<T> {
+    fn new(ring_buffer: RingBuffer<T>) -> Self {
+        Self { ring_buffer }
+    }
+}
+
 pub struct RingBufferWriter<T: Copy> {
     ring_buffer: RingBuffer<T>,
 }
@@ -141,11 +178,11 @@ impl<T: Copy> BufferWriter<T> for RingBufferWriter<T> {
         let tail_index = self.ring_buffer.tail_index();
         let capacity = self.ring_buffer.capacity();
 
-        let available = capacity - tail_index.wrapping_sub(head_index);
+        let available = capacity - head_index.wrapping_sub(tail_index);
         if available > size {
-            (size, tail_index)
+            (size, head_index)
         } else {
-            (available, tail_index)
+            (available, head_index)
         }
     }
 
@@ -153,46 +190,7 @@ impl<T: Copy> BufferWriter<T> for RingBufferWriter<T> {
     fn get_mut(&mut self, index: u32) -> &mut T {
         let index = index % self.ring_buffer.capacity();
         let ring_buffer = self.ring_buffer.buffer_mut();
-
         ring_buffer.get_mut(index as usize).unwrap()
-    }
-
-    #[inline(always)]
-    fn advance_index(&mut self, offset: u32) {
-        self.ring_buffer.advance_tail_index(offset);
-    }
-}
-
-impl<T: Copy> RingBufferWriter<T> {
-    fn new(ring_buffer: RingBuffer<T>) -> Self {
-        Self { ring_buffer }
-    }
-}
-
-pub struct RingBufferReader<T: Copy> {
-    ring_buffer: RingBuffer<T>,
-}
-
-impl<T: Copy> BufferReader<T> for RingBufferReader<T> {
-    #[inline(always)]
-    fn filled(&self, size: u32) -> (u32, u32) {
-        let head_index = self.ring_buffer.head_index();
-        let tail_index = self.ring_buffer.tail_index();
-
-        let filled = tail_index.wrapping_sub(head_index);
-        if filled > size {
-            (size, head_index)
-        } else {
-            (filled, head_index)
-        }
-    }
-
-    #[inline(always)]
-    fn get(&self, index: u32) -> &T {
-        let index = index % self.ring_buffer.capacity();
-        let ring_buffer = self.ring_buffer.buffer_ref();
-
-        ring_buffer.get(index as usize).unwrap()
     }
 
     #[inline(always)]
@@ -201,7 +199,7 @@ impl<T: Copy> BufferReader<T> for RingBufferReader<T> {
     }
 }
 
-impl<T: Copy> RingBufferReader<T> {
+impl<T: Copy> RingBufferWriter<T> {
     fn new(ring_buffer: RingBuffer<T>) -> Self {
         Self { ring_buffer }
     }
@@ -218,7 +216,6 @@ impl BufferWriter<u64> for FillRing {
     fn available(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
-
         (available, index)
     }
 
@@ -245,7 +242,6 @@ impl FillRing {
 
         let ring = unsafe { MaybeUninit::<xsk_ring_prod>::zeroed().assume_init() };
         let ring_ptr = Box::into_raw(Box::new(ring));
-
         Ok(Self {
             ring_buffer: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
         })
@@ -268,7 +264,6 @@ impl BufferReader<u64> for CompletionRing {
     fn filled(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
-
         (filled, index)
     }
 
@@ -295,7 +290,6 @@ impl CompletionRing {
 
         let ring = unsafe { MaybeUninit::<xsk_ring_cons>::zeroed().assume_init() };
         let ring_ptr = Box::into_raw(Box::new(ring));
-
         Ok(Self {
             ring_buffer: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
         })
@@ -318,7 +312,6 @@ impl BufferWriter<xdp_desc> for TxRing {
     fn available(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
-
         (available, index)
     }
 
@@ -345,7 +338,6 @@ impl TxRing {
 
         let ring = unsafe { MaybeUninit::<xsk_ring_prod>::zeroed().assume_init() };
         let ring_ptr = Box::into_raw(Box::new(ring));
-
         Ok(Self {
             ring_buffer: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
         })
@@ -368,7 +360,6 @@ impl BufferReader<xdp_desc> for RxRing {
     fn filled(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
-
         (filled, index)
     }
 
@@ -395,7 +386,6 @@ impl RxRing {
 
         let ring = unsafe { MaybeUninit::<xsk_ring_cons>::zeroed().assume_init() };
         let ring_ptr = Box::into_raw(Box::new(ring));
-
         Ok(Self {
             ring_buffer: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
         })
@@ -407,8 +397,26 @@ impl RxRing {
     }
 }
 
-#[derive(Debug)]
 pub enum RingError {
     IsNotPowerOfTwo(u32),
     Initialize,
 }
+
+impl std::fmt::Debug for RingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl std::fmt::Display for RingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IsNotPowerOfTwo(size) => {
+                write!(f, "The ring size '{}' is not the power of two.", size)
+            }
+            Self::Initialize => write!(f, "Failed to initialize the ring buffer."),
+        }
+    }
+}
+
+impl std::error::Error for RingError {}
