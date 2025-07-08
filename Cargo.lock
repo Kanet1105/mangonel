@@ -241,6 +241,7 @@ version = "0.1.0"
 dependencies = [
  "ctrlc",
  "getrandom",
+ "mangonel-libxdp",
  "mangonel-thread",
  "pnet",
  "serde",
@@ -254,7 +255,6 @@ name = "mangonel-libxdp"
 version = "0.1.0"
 dependencies = [
  "libc",
- "mangonel-data-plane",
  "mangonel-libxdp-sys",
 ]
 
