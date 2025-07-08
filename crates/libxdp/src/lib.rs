@@ -1,6 +1,9 @@
-pub mod descriptor;
-pub mod mmap;
-pub mod ring;
-pub mod socket;
-pub mod umem;
-pub mod util;
+mod descriptor;
+mod mmap;
+mod ring;
+mod socket;
+mod umem;
+mod util;
+
+pub use descriptor::Descriptor;
+pub use socket::{Socket, SocketBuilder, SocketError};

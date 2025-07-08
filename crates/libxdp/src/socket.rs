@@ -2,8 +2,8 @@ use crate::{
     descriptor::Descriptor,
     mmap::{Mmap, MmapError},
     ring::{
-        BufferReader, BufferWriter, CompletionRing, FillRing, RingBuffer, RingBufferReader,
-        RingBufferWriter, RingError, RxRing, TxRing,
+        BufferReader, BufferWriter, CompletionRing, DescriptorBuffer, DescriptorReader,
+        DescriptorWriter, FillRing, RingError, RxRing, TxRing,
     },
     umem::{Umem, UmemError},
     util,
@@ -49,7 +49,7 @@ impl SocketBuilder {
         self,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(SocketSender, SocketReceiver), SocketError> {
+    ) -> Result<(SocketWriter, SocketReader), SocketError> {
         Socket::init(
             self.frame_size,
             self.frame_headroom_size,
@@ -99,21 +99,36 @@ impl Socket {
         force_zero_copy: bool,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(SocketSender, SocketReceiver), SocketError> {
+    ) -> Result<(SocketWriter, SocketReader), SocketError> {
+        // Increase the maximum size of the process's virtual memory.
         util::setrlimit();
 
+        // Initialize the memory map.
         let length = (frame_size + frame_headroom_size) * ring_size;
-        let mmap = Mmap::new(length as usize, use_hugetlb).map_err(SocketError::Mmap)?;
+        let mmap = Mmap::new(length as usize, use_hugetlb)?;
 
-        let (umem, fill_ring, completion_ring) =
-            Umem::new(mmap, frame_size, frame_headroom_size, ring_size)
-                .map_err(SocketError::Umem)?;
+        // Initialize XDP ring buffers.
+        let fill_ring = FillRing::new(ring_size)?;
+        let completion_ring = CompletionRing::new(ring_size)?;
+        let rx_ring = RxRing::new(ring_size)?;
+        let tx_ring = TxRing::new(ring_size)?;
 
+        // Initialize XDP UMEM.
+        let umem = Umem::new(
+            mmap,
+            &fill_ring,
+            &completion_ring,
+            frame_size,
+            frame_headroom_size,
+            ring_size,
+        )?;
+
+        // Initialize XDP socket.
         let mut socket = null_mut();
+
         let interface_name =
             CString::new(interface_name.as_ref()).map_err(SocketError::InvalidInterfaceName)?;
-        let rx_ring = RxRing::new(ring_size).map_err(SocketError::Ring)?;
-        let tx_ring = TxRing::new(ring_size).map_err(SocketError::Ring)?;
+
         let mut xdp_flags = 0;
         match force_zero_copy {
             true => xdp_flags |= XDP_ZEROCOPY,
@@ -153,17 +168,17 @@ impl Socket {
             .into(),
         };
 
+        // Prefill the descriptor buffer.
         let mut prefilled_buffer = Vec::<u64>::with_capacity(ring_size as usize);
         (0..ring_size).for_each(|descriptor_index| {
             let address = descriptor_index * (frame_size + frame_headroom_size);
             prefilled_buffer.push(address as u64);
         });
         let (buffer_writer, buffer_reader) =
-            RingBuffer::from_vec(prefilled_buffer).map_err(SocketError::Ring)?;
+            DescriptorBuffer::from_vec(prefilled_buffer).map_err(SocketError::Ring)?;
 
-        let tx_socket = SocketSender::new(socket.clone(), completion_ring, tx_ring, buffer_writer);
-        let rx_socket = SocketReceiver::new(socket, fill_ring, rx_ring, buffer_reader);
-
+        let tx_socket = SocketWriter::new(socket.clone(), completion_ring, tx_ring, buffer_writer);
+        let rx_socket = SocketReader::new(socket, fill_ring, rx_ring, buffer_reader);
         Ok((tx_socket, rx_socket))
     }
 
@@ -178,19 +193,19 @@ impl Socket {
     }
 }
 
-pub struct SocketReceiver {
+pub struct SocketReader {
     socket: Socket,
     fill_ring: FillRing,
     rx_ring: RxRing,
-    buffer_reader: RingBufferReader<u64>,
+    buffer_reader: DescriptorReader<u64>,
 }
 
-impl SocketReceiver {
+impl SocketReader {
     fn new(
         socket: Socket,
         fill_ring: FillRing,
         rx_ring: RxRing,
-        buffer_reader: RingBufferReader<u64>,
+        buffer_reader: DescriptorReader<u64>,
     ) -> Self {
         Self {
             socket,
@@ -248,19 +263,19 @@ impl SocketReceiver {
     }
 }
 
-pub struct SocketSender {
+pub struct SocketWriter {
     socket: Socket,
     completion_ring: CompletionRing,
     tx_ring: TxRing,
-    buffer_writer: RingBufferWriter<u64>,
+    buffer_writer: DescriptorWriter<u64>,
 }
 
-impl SocketSender {
+impl SocketWriter {
     fn new(
         socket: Socket,
         completion_ring: CompletionRing,
         tx_ring: TxRing,
-        buffer_writer: RingBufferWriter<u64>,
+        buffer_writer: DescriptorWriter<u64>,
     ) -> Self {
         Self {
             socket,
@@ -322,20 +337,52 @@ impl SocketSender {
     }
 }
 
-#[derive(Debug)]
 pub enum SocketError {
     Mmap(MmapError),
-    Umem(UmemError),
     Ring(RingError),
+    Umem(UmemError),
     InvalidInterfaceName(NulError),
     Initialize(std::io::Error),
     SocketIsNull,
 }
 
+impl std::fmt::Debug for SocketError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
 impl std::fmt::Display for SocketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        match self {
+            Self::Mmap(error) => write!(f, "{}", error),
+            Self::Ring(error) => write!(f, "{}", error),
+            Self::Umem(error) => write!(f, "{}", error),
+            Self::InvalidInterfaceName(error) => {
+                write!(f, "Interface name contains null character(s): {}", error)
+            }
+            Self::Initialize(error) => write!(f, "Failed to initialize XDP socket: {}", error),
+            Self::SocketIsNull => write!(f, "Socket returned null. This is a bug."),
+        }
     }
 }
 
 impl std::error::Error for SocketError {}
+
+impl From<MmapError> for SocketError {
+    fn from(value: MmapError) -> Self {
+        Self::Mmap(value)
+    }
+}
+
+impl From<RingError> for SocketError {
+    fn from(value: RingError) -> Self {
+        Self::Ring(value)
+    }
+}
+
+impl From<UmemError> for SocketError {
+    fn from(value: UmemError) -> Self {
+        Self::Umem(value)
+    }
+}

@@ -1,6 +1,6 @@
 use crate::{
     mmap::Mmap,
-    ring::{CompletionRing, FillRing, RingError},
+    ring::{CompletionRing, FillRing},
 };
 use mangonel_libxdp_sys::{
     xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
@@ -54,13 +54,13 @@ impl Clone for Umem {
 impl Umem {
     pub fn new(
         mmap: Mmap,
+        fill_ring: &FillRing,
+        completion_ring: &CompletionRing,
         frame_size: u32,
         frame_headroom_size: u32,
         ring_size: u32,
-    ) -> Result<(Self, FillRing, CompletionRing), UmemError> {
+    ) -> Result<Self, UmemError> {
         let mut umem_ptr = null_mut::<xsk_umem>();
-        let fill_ring = FillRing::new(ring_size).map_err(UmemError::Ring)?;
-        let completion_ring = CompletionRing::new(ring_size).map_err(UmemError::Ring)?;
         let umem_config = xsk_umem_config {
             fill_size: ring_size,
             comp_size: ring_size,
@@ -93,8 +93,7 @@ impl Umem {
             }
             .into(),
         };
-
-        Ok((umem, fill_ring, completion_ring))
+        Ok(umem)
     }
 
     #[inline(always)]
@@ -118,17 +117,25 @@ impl Umem {
     }
 }
 
-#[derive(Debug)]
 pub enum UmemError {
-    Ring(RingError),
     Initialize(std::io::Error),
     UmemIsNull,
     Free(std::io::Error),
 }
 
+impl std::fmt::Debug for UmemError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
 impl std::fmt::Display for UmemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        match self {
+            Self::Initialize(error) => write!(f, "Failed to initialize Umem: {}", error),
+            Self::UmemIsNull => write!(f, "Umem returned null. This is a bug."),
+            Self::Free(error) => write!(f, "Failed to free Umem: {}", error),
+        }
     }
 }
 

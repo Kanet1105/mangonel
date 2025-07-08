@@ -31,20 +31,20 @@ pub trait BufferWriter<T: Copy> {
     fn advance_index(&mut self, offset: u32);
 }
 
-pub struct RingBuffer<T: Copy> {
-    inner: Arc<RingBufferInner<T>>,
+pub struct DescriptorBuffer<T: Copy> {
+    inner: Arc<DescriptorBufferInner<T>>,
 }
 
-struct RingBufferInner<T: Copy> {
+struct DescriptorBufferInner<T: Copy> {
     buffer: NonNull<Vec<T>>,
     capacity: u32,
     head: AtomicU32,
     tail: AtomicU32,
 }
 
-unsafe impl<T: Copy> Send for RingBuffer<T> {}
+unsafe impl<T: Copy> Send for DescriptorBuffer<T> {}
 
-impl<T: Copy> Clone for RingBuffer<T> {
+impl<T: Copy> Clone for DescriptorBuffer<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -52,17 +52,18 @@ impl<T: Copy> Clone for RingBuffer<T> {
     }
 }
 
-impl<T: Copy> RingBuffer<T> {
+impl<T: Copy> DescriptorBuffer<T> {
+    #[allow(unused)]
     pub fn with_capacity(
         capacity: u32,
-    ) -> Result<(RingBufferWriter<T>, RingBufferReader<T>), RingError> {
+    ) -> Result<(DescriptorWriter<T>, DescriptorReader<T>), RingError> {
         let mut buffer = Vec::<T>::with_capacity(capacity as usize);
         let t = unsafe { MaybeUninit::<T>::zeroed().assume_init() };
         (0..capacity).for_each(|_| buffer.push(t));
         let buffer_ptr = Box::into_raw(Box::new(buffer));
 
         let ring_buffer = Self {
-            inner: RingBufferInner {
+            inner: DescriptorBufferInner {
                 buffer: NonNull::new(buffer_ptr).ok_or(RingError::Initialize)?,
                 capacity,
                 head: 0.into(),
@@ -71,16 +72,16 @@ impl<T: Copy> RingBuffer<T> {
             .into(),
         };
 
-        let writer = RingBufferWriter::new(ring_buffer.clone());
-        let reader = RingBufferReader::new(ring_buffer);
+        let writer = DescriptorWriter::new(ring_buffer.clone());
+        let reader = DescriptorReader::new(ring_buffer);
         Ok((writer, reader))
     }
 
-    pub fn from_vec(vec: Vec<T>) -> Result<(RingBufferWriter<T>, RingBufferReader<T>), RingError> {
+    pub fn from_vec(vec: Vec<T>) -> Result<(DescriptorWriter<T>, DescriptorReader<T>), RingError> {
         let capacity = vec.len() as u32;
         let buffer_ptr = Box::into_raw(Box::new(vec));
         let ring_buffer = Self {
-            inner: RingBufferInner {
+            inner: DescriptorBufferInner {
                 buffer: NonNull::new(buffer_ptr).ok_or(RingError::Initialize)?,
                 capacity,
                 head: 0.into(),
@@ -89,8 +90,8 @@ impl<T: Copy> RingBuffer<T> {
             .into(),
         };
 
-        let writer = RingBufferWriter::new(ring_buffer.clone());
-        let reader = RingBufferReader::new(ring_buffer);
+        let writer = DescriptorWriter::new(ring_buffer.clone());
+        let reader = DescriptorReader::new(ring_buffer);
         Ok((writer, reader))
     }
 
@@ -130,11 +131,11 @@ impl<T: Copy> RingBuffer<T> {
     }
 }
 
-pub struct RingBufferReader<T: Copy> {
-    ring_buffer: RingBuffer<T>,
+pub struct DescriptorReader<T: Copy> {
+    ring_buffer: DescriptorBuffer<T>,
 }
 
-impl<T: Copy> BufferReader<T> for RingBufferReader<T> {
+impl<T: Copy> BufferReader<T> for DescriptorReader<T> {
     #[inline(always)]
     fn filled(&self, size: u32) -> (u32, u32) {
         let head_index = self.ring_buffer.head_index();
@@ -161,17 +162,17 @@ impl<T: Copy> BufferReader<T> for RingBufferReader<T> {
     }
 }
 
-impl<T: Copy> RingBufferReader<T> {
-    fn new(ring_buffer: RingBuffer<T>) -> Self {
+impl<T: Copy> DescriptorReader<T> {
+    fn new(ring_buffer: DescriptorBuffer<T>) -> Self {
         Self { ring_buffer }
     }
 }
 
-pub struct RingBufferWriter<T: Copy> {
-    ring_buffer: RingBuffer<T>,
+pub struct DescriptorWriter<T: Copy> {
+    ring_buffer: DescriptorBuffer<T>,
 }
 
-impl<T: Copy> BufferWriter<T> for RingBufferWriter<T> {
+impl<T: Copy> BufferWriter<T> for DescriptorWriter<T> {
     #[inline(always)]
     fn available(&self, size: u32) -> (u32, u32) {
         let head_index = self.ring_buffer.head_index();
@@ -199,8 +200,8 @@ impl<T: Copy> BufferWriter<T> for RingBufferWriter<T> {
     }
 }
 
-impl<T: Copy> RingBufferWriter<T> {
-    fn new(ring_buffer: RingBuffer<T>) -> Self {
+impl<T: Copy> DescriptorWriter<T> {
+    fn new(ring_buffer: DescriptorBuffer<T>) -> Self {
         Self { ring_buffer }
     }
 }
