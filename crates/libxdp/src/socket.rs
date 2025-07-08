@@ -2,8 +2,8 @@ use crate::{
     descriptor::Descriptor,
     mmap::{Mmap, MmapError},
     ring::{
-        BufferReader, BufferWriter, CompletionRing, DescriptorBuffer, DescriptorReader,
-        DescriptorWriter, FillRing, RingError, RxRing, TxRing,
+        BufferReader, BufferWriter, CompletionRing, FillRing, FreeRing, FreeRingReader,
+        FreeRingWriter, RingError, RxRing, TxRing,
     },
     umem::{Umem, UmemError},
     util,
@@ -174,11 +174,10 @@ impl Socket {
             let address = descriptor_index * (frame_size + frame_headroom_size);
             prefilled_buffer.push(address as u64);
         });
-        let (buffer_writer, buffer_reader) =
-            DescriptorBuffer::from_vec(prefilled_buffer).map_err(SocketError::Ring)?;
+        let (free_writer, free_reader) = FreeRing::from_vec(prefilled_buffer)?;
 
-        let tx_socket = SocketWriter::new(socket.clone(), completion_ring, tx_ring, buffer_writer);
-        let rx_socket = SocketReader::new(socket, fill_ring, rx_ring, buffer_reader);
+        let tx_socket = SocketWriter::new(socket.clone(), completion_ring, tx_ring, free_writer);
+        let rx_socket = SocketReader::new(socket, fill_ring, rx_ring, free_reader);
         Ok((tx_socket, rx_socket))
     }
 
@@ -197,7 +196,7 @@ pub struct SocketReader {
     socket: Socket,
     fill_ring: FillRing,
     rx_ring: RxRing,
-    buffer_reader: DescriptorReader<u64>,
+    free_ring: FreeRingReader<u64>,
 }
 
 impl SocketReader {
@@ -205,13 +204,13 @@ impl SocketReader {
         socket: Socket,
         fill_ring: FillRing,
         rx_ring: RxRing,
-        buffer_reader: DescriptorReader<u64>,
+        free_ring: FreeRingReader<u64>,
     ) -> Self {
         Self {
             socket,
             fill_ring,
             rx_ring,
-            buffer_reader,
+            free_ring,
         }
     }
 
@@ -227,20 +226,19 @@ impl SocketReader {
 
     #[inline(always)]
     fn fill(&mut self, size: u32) -> u32 {
-        let (filled, reader_index) = self.buffer_reader.filled(size);
-        let (available, writer_index) = self.fill_ring.available(filled);
-        if available > 0 {
-            for offset in 0..available {
-                let data = self.buffer_reader.get(reader_index + offset);
-                let empty = self.fill_ring.get_mut(writer_index + offset);
-                *empty = *data;
-            }
-            self.buffer_reader.advance_index(available);
-            self.fill_ring.advance_index(available);
-            available
-        } else {
-            0
+        let (free_filled, free_index) = self.free_ring.filled(size);
+        let (fill_available, fill_index) = self.fill_ring.available(free_filled);
+        let mut offset: u32 = 0;
+
+        if offset < fill_available {
+            let descriptor_address = self.free_ring.get(free_index + offset);
+            let target = self.fill_ring.get_mut(fill_index + offset);
+            *target = *descriptor_address;
+            offset += 1;
         }
+        self.free_ring.advance_index(offset);
+        self.fill_ring.advance_index(offset);
+        offset
     }
 
     #[inline(always)]
@@ -248,18 +246,21 @@ impl SocketReader {
         self.fill(self.socket.inner.umem.umem_config().fill_size);
         self.poll();
 
-        let (filled, index) = self.rx_ring.filled(buffer.len() as u32);
-        if filled > 0 {
-            for offset in 0..filled {
-                let descriptor_ref = self.rx_ring.get(index + offset);
+        let (rx_filled, rx_index) = self.rx_ring.filled(buffer.len() as u32);
+        let mut offset: u32 = 0;
+
+        for target_descriptor in buffer {
+            if offset < rx_filled {
+                let descriptor_ref = self.rx_ring.get(rx_index + offset);
                 let descriptor = Descriptor::new(descriptor_ref, self.socket.umem());
-                buffer[offset as usize] = descriptor;
+                *target_descriptor = descriptor;
+                offset += 1;
+            } else {
+                break;
             }
-            self.rx_ring.advance_index(filled);
-            filled
-        } else {
-            0
         }
+        self.rx_ring.advance_index(offset);
+        offset
     }
 }
 
@@ -267,7 +268,7 @@ pub struct SocketWriter {
     socket: Socket,
     completion_ring: CompletionRing,
     tx_ring: TxRing,
-    buffer_writer: DescriptorWriter<u64>,
+    free_ring: FreeRingWriter<u64>,
 }
 
 impl SocketWriter {
@@ -275,13 +276,13 @@ impl SocketWriter {
         socket: Socket,
         completion_ring: CompletionRing,
         tx_ring: TxRing,
-        buffer_writer: DescriptorWriter<u64>,
+        free_ring: FreeRingWriter<u64>,
     ) -> Self {
         Self {
             socket,
             completion_ring,
             tx_ring,
-            buffer_writer,
+            free_ring,
         }
     }
 
@@ -301,39 +302,53 @@ impl SocketWriter {
 
     #[inline(always)]
     fn complete(&mut self, size: u32) -> u32 {
-        let (filled, reader_index) = self.completion_ring.filled(size);
-        let (available, writer_index) = self.buffer_writer.available(filled);
-        if available > 0 {
-            for offset in 0..available {
-                let data = self.completion_ring.get(reader_index + offset);
-                let empty = self.buffer_writer.get_mut(writer_index + offset);
-                *empty = *data;
-            }
-            self.completion_ring.advance_index(available);
-            self.buffer_writer.advance_index(available);
-            filled
-        } else {
-            0
+        let (completion_filled, completion_index) = self.completion_ring.filled(size);
+        let (free_available, free_index) = self.free_ring.available(completion_filled);
+        let mut offset: u32 = 0;
+
+        if offset < free_available {
+            let descriptor_address = self.completion_ring.get(completion_index + offset);
+            let target = self.free_ring.get_mut(free_index + offset);
+            *target = *descriptor_address;
+            offset += 1;
         }
+        self.completion_ring.advance_index(offset);
+        self.free_ring.advance_index(offset);
+        offset
     }
 
     #[inline(always)]
     pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
-        let (available, index) = self.tx_ring.available(buffer.len() as u32);
-        if available > 0 {
-            for offset in 0..available {
-                let data = self.tx_ring.get_mut(index + offset);
-                data.addr = buffer[offset as usize].address;
-                data.len = buffer[offset as usize].length;
-            }
-            self.tx_ring.advance_index(available);
+        let (free_available, free_index) = self.free_ring.available(buffer.len() as u32);
+        let mut free_offset: u32 = 0;
+        let (tx_available, tx_index) = self.tx_ring.available(buffer.len() as u32);
+        let mut tx_offset: u32 = 0;
 
-            self.send();
-            self.complete(self.socket.umem().umem_config().comp_size);
-            available
-        } else {
-            0
+        for descriptor in buffer {
+            // Drop the packet by directly writing the descriptor address to [`FreeRing`].
+            if descriptor.drop {
+                if free_offset < free_available {
+                    let empty = self.free_ring.get_mut(free_index + free_offset);
+                    *empty = descriptor.address;
+                    free_offset += 1;
+                }
+
+            // Write the descriptor to [`TxRing`]
+            } else {
+                if tx_offset < tx_available {
+                    let descriptor_mut = self.tx_ring.get_mut(tx_index + tx_offset);
+                    descriptor_mut.addr = descriptor.address;
+                    descriptor_mut.len = descriptor.length;
+                    tx_offset += 1;
+                }
+            }
         }
+        self.free_ring.advance_index(free_offset);
+        self.tx_ring.advance_index(tx_offset);
+
+        self.send();
+        self.complete(self.socket.umem().umem_config().comp_size);
+        free_offset + tx_offset
     }
 }
 
