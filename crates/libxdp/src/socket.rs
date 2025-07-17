@@ -49,7 +49,7 @@ impl SocketBuilder {
         self,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(SocketWriter, SocketReader), SocketError> {
+    ) -> Result<(TxSocket, RxSocket), SocketError> {
         Socket::init(
             self.frame_size,
             self.frame_headroom_size,
@@ -99,7 +99,7 @@ impl Socket {
         force_zero_copy: bool,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(SocketWriter, SocketReader), SocketError> {
+    ) -> Result<(TxSocket, RxSocket), SocketError> {
         // Increase the maximum size of the process's virtual memory.
         util::setrlimit();
 
@@ -176,8 +176,14 @@ impl Socket {
         });
         let (free_writer, free_reader) = FreeRing::from_vec(prefilled_buffer)?;
 
-        let tx_socket = SocketWriter::new(socket.clone(), completion_ring, tx_ring, free_writer);
-        let rx_socket = SocketReader::new(socket, fill_ring, rx_ring, free_reader);
+        let tx_socket = TxSocket::new(
+            socket.clone(),
+            ring_size,
+            completion_ring,
+            tx_ring,
+            free_writer,
+        );
+        let rx_socket = RxSocket::new(socket, ring_size, fill_ring, rx_ring, free_reader);
         Ok((tx_socket, rx_socket))
     }
 
@@ -192,22 +198,25 @@ impl Socket {
     }
 }
 
-pub struct SocketReader {
+pub struct RxSocket {
     socket: Socket,
+    ring_size: u32,
     fill_ring: FillRing,
     rx_ring: RxRing,
     free_ring: FreeRingReader<u64>,
 }
 
-impl SocketReader {
+impl RxSocket {
     fn new(
         socket: Socket,
+        ring_size: u32,
         fill_ring: FillRing,
         rx_ring: RxRing,
         free_ring: FreeRingReader<u64>,
     ) -> Self {
         Self {
             socket,
+            ring_size,
             fill_ring,
             rx_ring,
             free_ring,
@@ -225,12 +234,11 @@ impl SocketReader {
     }
 
     #[inline(always)]
-    fn fill(&mut self, size: u32) -> u32 {
+    fn fill(&mut self, size: u32) {
         let (free_filled, free_index) = self.free_ring.filled(size);
         let (fill_available, fill_index) = self.fill_ring.available(free_filled);
         let mut offset: u32 = 0;
-
-        if offset < fill_available {
+        while offset < fill_available {
             let descriptor_address = self.free_ring.get(free_index + offset);
             let target = self.fill_ring.get_mut(fill_index + offset);
             *target = *descriptor_address;
@@ -238,48 +246,72 @@ impl SocketReader {
         }
         self.free_ring.advance_index(offset);
         self.fill_ring.advance_index(offset);
-        offset
     }
 
     #[inline(always)]
-    pub fn read(&mut self, buffer: &mut [Descriptor]) -> u32 {
-        self.fill(self.socket.inner.umem.umem_config().fill_size);
+    pub fn read(&mut self) -> RxIter<'_> {
+        self.fill(self.socket.umem().umem_config().fill_size);
         self.poll();
-
-        let (rx_filled, rx_index) = self.rx_ring.filled(buffer.len() as u32);
-        let mut offset: u32 = 0;
-
-        for target_descriptor in buffer {
-            if offset < rx_filled {
-                let descriptor_ref = self.rx_ring.get(rx_index + offset);
-                let descriptor = Descriptor::new(descriptor_ref, self.socket.umem());
-                *target_descriptor = descriptor;
-                offset += 1;
-            } else {
-                break;
-            }
-        }
-        self.rx_ring.advance_index(offset);
-        offset
+        RxIter::new(self)
     }
 }
 
-pub struct SocketWriter {
+pub struct RxIter<'a> {
+    rx_socket: &'a mut RxSocket,
+    length: u32,
+    index: u32,
+    offset: u32,
+}
+
+impl<'a> Iterator for RxIter<'a> {
+    type Item = Descriptor;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset < self.length {
+            let descriptor_ref = self.rx_socket.rx_ring.get(self.index + self.offset);
+            let descriptor = Descriptor::new(descriptor_ref, self.rx_socket.socket.umem());
+            self.offset += 1;
+            Some(descriptor)
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> RxIter<'a> {
+    #[inline(always)]
+    pub fn new(rx_socket: &'a mut RxSocket) -> Self {
+        let (rx_filled, rx_index) = rx_socket.rx_ring.filled(rx_socket.ring_size);
+        rx_socket.rx_ring.advance_index(rx_filled);
+        Self {
+            rx_socket,
+            length: rx_filled,
+            index: rx_index,
+            offset: 0,
+        }
+    }
+}
+
+pub struct TxSocket {
     socket: Socket,
+    ring_size: u32,
     completion_ring: CompletionRing,
     tx_ring: TxRing,
     free_ring: FreeRingWriter<u64>,
 }
 
-impl SocketWriter {
+impl TxSocket {
     fn new(
         socket: Socket,
+        ring_size: u32,
         completion_ring: CompletionRing,
         tx_ring: TxRing,
         free_ring: FreeRingWriter<u64>,
     ) -> Self {
         Self {
             socket,
+            ring_size,
             completion_ring,
             tx_ring,
             free_ring,
@@ -301,12 +333,11 @@ impl SocketWriter {
     }
 
     #[inline(always)]
-    fn complete(&mut self, size: u32) -> u32 {
+    fn complete(&mut self, size: u32) {
         let (completion_filled, completion_index) = self.completion_ring.filled(size);
         let (free_available, free_index) = self.free_ring.available(completion_filled);
         let mut offset: u32 = 0;
-
-        if offset < free_available {
+        while offset < free_available {
             let descriptor_address = self.completion_ring.get(completion_index + offset);
             let target = self.free_ring.get_mut(free_index + offset);
             *target = *descriptor_address;
@@ -314,41 +345,42 @@ impl SocketWriter {
         }
         self.completion_ring.advance_index(offset);
         self.free_ring.advance_index(offset);
-        offset
     }
 
     #[inline(always)]
-    pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
-        let (free_available, free_index) = self.free_ring.available(buffer.len() as u32);
-        let mut free_offset: u32 = 0;
-        let (tx_available, tx_index) = self.tx_ring.available(buffer.len() as u32);
-        let mut tx_offset: u32 = 0;
-
-        for descriptor in buffer {
-            // Drop the packet by directly writing the descriptor address to [`FreeRing`].
-            if descriptor.drop {
-                if free_offset < free_available {
-                    let empty = self.free_ring.get_mut(free_index + free_offset);
-                    *empty = descriptor.address;
-                    free_offset += 1;
-                }
-
-            // Write the descriptor to [`TxRing`]
+    pub fn free(&mut self, mut iter: impl Iterator<Item = Descriptor>) {
+        let (free_available, free_index) = self.free_ring.available(self.ring_size);
+        let mut offset: u32 = 0;
+        while offset < free_available {
+            if let Some(descriptor) = iter.next() {
+                let empty = self.free_ring.get_mut(free_index + offset);
+                *empty = descriptor.address;
+                offset += 1;
             } else {
-                if tx_offset < tx_available {
-                    let descriptor_mut = self.tx_ring.get_mut(tx_index + tx_offset);
-                    descriptor_mut.addr = descriptor.address;
-                    descriptor_mut.len = descriptor.length;
-                    tx_offset += 1;
-                }
+                break;
             }
         }
-        self.free_ring.advance_index(free_offset);
-        self.tx_ring.advance_index(tx_offset);
+        self.free_ring.advance_index(offset);
+    }
+
+    #[inline(always)]
+    pub fn write(&mut self, mut iter: impl Iterator<Item = Descriptor>) {
+        let (tx_available, tx_index) = self.tx_ring.available(self.ring_size);
+        let mut offset: u32 = 0;
+        while offset < tx_available {
+            if let Some(descriptor) = iter.next() {
+                let descriptor_mut = self.tx_ring.get_mut(tx_index + offset);
+                descriptor_mut.addr = descriptor.address;
+                descriptor_mut.len = descriptor.length;
+                offset += 1;
+            } else {
+                break;
+            }
+        }
+        self.tx_ring.advance_index(offset);
 
         self.send();
-        self.complete(self.socket.umem().umem_config().comp_size);
-        free_offset + tx_offset
+        self.complete(self.ring_size);
     }
 }
 
