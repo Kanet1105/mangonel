@@ -38,7 +38,6 @@ impl Mmap {
         if address == MAP_FAILED {
             return Err(MmapError::Initialize(std::io::Error::last_os_error()));
         }
-
         Ok(Self {
             address: NonNull::new(address).ok_or(MmapError::MmapIsNull)?,
             length,
@@ -69,17 +68,17 @@ pub enum MmapError {
 
 impl std::fmt::Debug for MmapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Initialize(error) => write!(f, "Failed to initialize `Mmap`: {:?}", error),
-            Self::MmapIsNull => write!(f, "Mmap address is null"),
-            Self::Free(error) => write!(f, "Failed to free `Mmap`: {:?}", error),
-        }
+        write!(f, "{self}")
     }
 }
 
 impl std::fmt::Display for MmapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        match self {
+            Self::Initialize(error) => write!(f, "Failed to initialize Mmap: {error}"),
+            Self::MmapIsNull => write!(f, "Mmap returned null. This is a bug."),
+            Self::Free(error) => write!(f, "Failed to free Mmap: {error}"),
+        }
     }
 }
 

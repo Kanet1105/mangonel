@@ -1,39 +1,29 @@
 use crate::umem::Umem;
 use mangonel_libxdp_sys::xdp_desc;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Descriptor {
-    address: u64,
-    length: u32,
-}
-
-impl From<&xdp_desc> for Descriptor {
-    fn from(value: &xdp_desc) -> Self {
-        Self {
-            address: value.addr,
-            length: value.len,
-        }
-    }
+    pub address: u64,
+    pub length: u32,
+    pub umem: Umem,
 }
 
 impl Descriptor {
     #[inline(always)]
-    pub fn address(&self) -> u64 {
-        self.address
+    pub fn new(descriptor: &xdp_desc, umem: &Umem) -> Self {
+        Self {
+            address: descriptor.addr,
+            length: descriptor.len,
+            umem: umem.clone(),
+        }
     }
 
     #[inline(always)]
-    pub fn length(&self) -> u32 {
-        self.length
-    }
-
-    #[inline(always)]
-    pub fn get_data(&mut self, umem: &Umem) -> &mut [u8] {
-        let headroom_size = umem.umem_config().frame_headroom;
+    pub fn get_data_mut(&mut self) -> &mut [u8] {
+        let headroom_size = self.umem.umem_config().frame_headroom;
         let address = self.address - headroom_size as u64;
         let length = self.length as u64 + headroom_size as u64;
-        let offset = umem.get_data(address) as *mut u8;
-
+        let offset = self.umem.get_data(address) as *mut u8;
         unsafe { std::slice::from_raw_parts_mut(offset, length as usize) }
     }
 }

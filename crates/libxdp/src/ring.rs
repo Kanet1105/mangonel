@@ -13,15 +13,9 @@ use std::{
     },
 };
 
-pub trait BufferWriter<T: Copy> {
-    fn available(&self, size: u32) -> (u32, u32);
-
-    fn get_mut(&mut self, index: u32) -> &mut T;
-
-    fn advance_index(&mut self, offset: u32);
-}
-
 pub trait BufferReader<T: Copy> {
+    /// Returns the number of filled indices and the current index.
+    /// The number of filled indices are always smaller than or equal to the size.
     fn filled(&self, size: u32) -> (u32, u32);
 
     fn get(&self, index: u32) -> &T;
@@ -29,20 +23,30 @@ pub trait BufferReader<T: Copy> {
     fn advance_index(&mut self, offset: u32);
 }
 
-pub struct RingBuffer<T: Copy> {
-    inner: Arc<RingBufferInner<T>>,
+pub trait BufferWriter<T: Copy> {
+    /// Returns the number of available indices and the current index.
+    /// The number of available indices are always smaller than or equal to the size.
+    fn available(&self, size: u32) -> (u32, u32);
+
+    fn get_mut(&mut self, index: u32) -> &mut T;
+
+    fn advance_index(&mut self, offset: u32);
 }
 
-struct RingBufferInner<T: Copy> {
+pub struct FreeRing<T: Copy> {
+    inner: Arc<FreeRingInner<T>>,
+}
+
+struct FreeRingInner<T: Copy> {
     buffer: NonNull<Vec<T>>,
     capacity: u32,
     head: AtomicU32,
     tail: AtomicU32,
 }
 
-unsafe impl<T: Copy> Send for RingBuffer<T> {}
+unsafe impl<T: Copy> Send for FreeRing<T> {}
 
-impl<T: Copy> Clone for RingBuffer<T> {
+impl<T: Copy> Clone for FreeRing<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -50,17 +54,18 @@ impl<T: Copy> Clone for RingBuffer<T> {
     }
 }
 
-impl<T: Copy> RingBuffer<T> {
+impl<T: Copy> FreeRing<T> {
+    #[allow(unused)]
     pub fn with_capacity(
         capacity: u32,
-    ) -> Result<(RingBufferWriter<T>, RingBufferReader<T>), RingError> {
+    ) -> Result<(FreeRingWriter<T>, FreeRingReader<T>), RingError> {
         let mut buffer = Vec::<T>::with_capacity(capacity as usize);
         let t = unsafe { MaybeUninit::<T>::zeroed().assume_init() };
         (0..capacity).for_each(|_| buffer.push(t));
         let buffer_ptr = Box::into_raw(Box::new(buffer));
 
         let ring_buffer = Self {
-            inner: RingBufferInner {
+            inner: FreeRingInner {
                 buffer: NonNull::new(buffer_ptr).ok_or(RingError::Initialize)?,
                 capacity,
                 head: 0.into(),
@@ -68,18 +73,17 @@ impl<T: Copy> RingBuffer<T> {
             }
             .into(),
         };
-
-        let writer = RingBufferWriter::new(ring_buffer.clone());
-        let reader = RingBufferReader::new(ring_buffer);
-
+        let writer = FreeRingWriter::new(ring_buffer.clone());
+        let reader = FreeRingReader::new(ring_buffer);
         Ok((writer, reader))
     }
 
-    pub fn from_vec(vec: Vec<T>) -> Result<(RingBufferWriter<T>, RingBufferReader<T>), RingError> {
+    pub fn from_vec(vec: Vec<T>) -> Result<(FreeRingWriter<T>, FreeRingReader<T>), RingError> {
         let capacity = vec.len() as u32;
         let buffer_ptr = Box::into_raw(Box::new(vec));
+
         let ring_buffer = Self {
-            inner: RingBufferInner {
+            inner: FreeRingInner {
                 buffer: NonNull::new(buffer_ptr).ok_or(RingError::Initialize)?,
                 capacity,
                 head: 0.into(),
@@ -87,10 +91,8 @@ impl<T: Copy> RingBuffer<T> {
             }
             .into(),
         };
-
-        let writer = RingBufferWriter::new(ring_buffer.clone());
-        let reader = RingBufferReader::new(ring_buffer);
-
+        let writer = FreeRingWriter::new(ring_buffer.clone());
+        let reader = FreeRingReader::new(ring_buffer);
         Ok((writer, reader))
     }
 
@@ -130,31 +132,29 @@ impl<T: Copy> RingBuffer<T> {
     }
 }
 
-pub struct RingBufferWriter<T: Copy> {
-    ring_buffer: RingBuffer<T>,
+pub struct FreeRingReader<T: Copy> {
+    ring_buffer: FreeRing<T>,
 }
 
-impl<T: Copy> BufferWriter<T> for RingBufferWriter<T> {
+impl<T: Copy> BufferReader<T> for FreeRingReader<T> {
     #[inline(always)]
-    fn available(&self, size: u32) -> (u32, u32) {
+    fn filled(&self, size: u32) -> (u32, u32) {
         let head_index = self.ring_buffer.head_index();
         let tail_index = self.ring_buffer.tail_index();
-        let capacity = self.ring_buffer.capacity();
 
-        let available = capacity - tail_index.wrapping_sub(head_index);
-        if available > size {
+        let filled = head_index.wrapping_sub(tail_index);
+        if filled > size {
             (size, tail_index)
         } else {
-            (available, tail_index)
+            (filled, tail_index)
         }
     }
 
     #[inline(always)]
-    fn get_mut(&mut self, index: u32) -> &mut T {
+    fn get(&self, index: u32) -> &T {
         let index = index % self.ring_buffer.capacity();
-        let ring_buffer = self.ring_buffer.buffer_mut();
-
-        ring_buffer.get_mut(index as usize).unwrap()
+        let ring_buffer = self.ring_buffer.buffer_ref();
+        ring_buffer.get(index as usize).unwrap()
     }
 
     #[inline(always)]
@@ -163,36 +163,36 @@ impl<T: Copy> BufferWriter<T> for RingBufferWriter<T> {
     }
 }
 
-impl<T: Copy> RingBufferWriter<T> {
-    fn new(ring_buffer: RingBuffer<T>) -> Self {
+impl<T: Copy> FreeRingReader<T> {
+    fn new(ring_buffer: FreeRing<T>) -> Self {
         Self { ring_buffer }
     }
 }
 
-pub struct RingBufferReader<T: Copy> {
-    ring_buffer: RingBuffer<T>,
+pub struct FreeRingWriter<T: Copy> {
+    ring_buffer: FreeRing<T>,
 }
 
-impl<T: Copy> BufferReader<T> for RingBufferReader<T> {
+impl<T: Copy> BufferWriter<T> for FreeRingWriter<T> {
     #[inline(always)]
-    fn filled(&self, size: u32) -> (u32, u32) {
+    fn available(&self, size: u32) -> (u32, u32) {
         let head_index = self.ring_buffer.head_index();
         let tail_index = self.ring_buffer.tail_index();
+        let capacity = self.ring_buffer.capacity();
 
-        let filled = tail_index.wrapping_sub(head_index);
-        if filled > size {
+        let available = capacity - head_index.wrapping_sub(tail_index);
+        if available > size {
             (size, head_index)
         } else {
-            (filled, head_index)
+            (available, head_index)
         }
     }
 
     #[inline(always)]
-    fn get(&self, index: u32) -> &T {
+    fn get_mut(&mut self, index: u32) -> &mut T {
         let index = index % self.ring_buffer.capacity();
-        let ring_buffer = self.ring_buffer.buffer_ref();
-
-        ring_buffer.get(index as usize).unwrap()
+        let ring_buffer = self.ring_buffer.buffer_mut();
+        ring_buffer.get_mut(index as usize).unwrap()
     }
 
     #[inline(always)]
@@ -201,8 +201,8 @@ impl<T: Copy> BufferReader<T> for RingBufferReader<T> {
     }
 }
 
-impl<T: Copy> RingBufferReader<T> {
-    fn new(ring_buffer: RingBuffer<T>) -> Self {
+impl<T: Copy> FreeRingWriter<T> {
+    fn new(ring_buffer: FreeRing<T>) -> Self {
         Self { ring_buffer }
     }
 }
@@ -218,7 +218,6 @@ impl BufferWriter<u64> for FillRing {
     fn available(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
-
         (available, index)
     }
 
@@ -245,7 +244,6 @@ impl FillRing {
 
         let ring = unsafe { MaybeUninit::<xsk_ring_prod>::zeroed().assume_init() };
         let ring_ptr = Box::into_raw(Box::new(ring));
-
         Ok(Self {
             ring_buffer: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
         })
@@ -268,7 +266,6 @@ impl BufferReader<u64> for CompletionRing {
     fn filled(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
-
         (filled, index)
     }
 
@@ -295,7 +292,6 @@ impl CompletionRing {
 
         let ring = unsafe { MaybeUninit::<xsk_ring_cons>::zeroed().assume_init() };
         let ring_ptr = Box::into_raw(Box::new(ring));
-
         Ok(Self {
             ring_buffer: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
         })
@@ -318,7 +314,6 @@ impl BufferWriter<xdp_desc> for TxRing {
     fn available(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
-
         (available, index)
     }
 
@@ -345,7 +340,6 @@ impl TxRing {
 
         let ring = unsafe { MaybeUninit::<xsk_ring_prod>::zeroed().assume_init() };
         let ring_ptr = Box::into_raw(Box::new(ring));
-
         Ok(Self {
             ring_buffer: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
         })
@@ -368,7 +362,6 @@ impl BufferReader<xdp_desc> for RxRing {
     fn filled(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
-
         (filled, index)
     }
 
@@ -395,7 +388,6 @@ impl RxRing {
 
         let ring = unsafe { MaybeUninit::<xsk_ring_cons>::zeroed().assume_init() };
         let ring_ptr = Box::into_raw(Box::new(ring));
-
         Ok(Self {
             ring_buffer: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
         })
@@ -407,8 +399,26 @@ impl RxRing {
     }
 }
 
-#[derive(Debug)]
 pub enum RingError {
     IsNotPowerOfTwo(u32),
     Initialize,
 }
+
+impl std::fmt::Debug for RingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+impl std::fmt::Display for RingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IsNotPowerOfTwo(size) => {
+                write!(f, "The ring size '{size}' is not the power of two.")
+            }
+            Self::Initialize => write!(f, "Failed to initialize the ring buffer."),
+        }
+    }
+}
+
+impl std::error::Error for RingError {}
