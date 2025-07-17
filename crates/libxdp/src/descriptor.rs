@@ -6,7 +6,6 @@ pub struct Descriptor {
     pub address: u64,
     pub length: u32,
     pub umem: Umem,
-    pub drop: bool,
 }
 
 impl Descriptor {
@@ -16,7 +15,6 @@ impl Descriptor {
             address: descriptor.addr,
             length: descriptor.len,
             umem: umem.clone(),
-            drop: false,
         }
     }
 
