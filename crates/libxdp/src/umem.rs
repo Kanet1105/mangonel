@@ -102,11 +102,6 @@ impl Umem {
     }
 
     #[inline(always)]
-    pub fn mmap(&self) -> &Mmap {
-        &self.inner.mmap
-    }
-
-    #[inline(always)]
     pub fn as_ptr(&self) -> *mut xsk_umem {
         self.inner.umem.as_ptr()
     }
