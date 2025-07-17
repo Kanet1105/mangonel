@@ -6,4 +6,4 @@ mod umem;
 mod util;
 
 pub use descriptor::Descriptor;
-pub use socket::{Socket, SocketBuilder, SocketError};
+pub use socket::{RxIter, RxSocket, Socket, SocketBuilder, SocketError, TxSocket};

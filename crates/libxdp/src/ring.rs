@@ -406,7 +406,7 @@ pub enum RingError {
 
 impl std::fmt::Debug for RingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
@@ -414,7 +414,7 @@ impl std::fmt::Display for RingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::IsNotPowerOfTwo(size) => {
-                write!(f, "The ring size '{}' is not the power of two.", size)
+                write!(f, "The ring size '{size}' is not the power of two.")
             }
             Self::Initialize => write!(f, "Failed to initialize the ring buffer."),
         }

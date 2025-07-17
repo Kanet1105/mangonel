@@ -120,16 +120,16 @@ pub enum UmemError {
 
 impl std::fmt::Debug for UmemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
 impl std::fmt::Display for UmemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Initialize(error) => write!(f, "Failed to initialize Umem: {}", error),
+            Self::Initialize(error) => write!(f, "Failed to initialize Umem: {error}"),
             Self::UmemIsNull => write!(f, "Umem returned null. This is a bug."),
-            Self::Free(error) => write!(f, "Failed to free Umem: {}", error),
+            Self::Free(error) => write!(f, "Failed to free Umem: {error}"),
         }
     }
 }

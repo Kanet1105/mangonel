@@ -395,20 +395,20 @@ pub enum SocketError {
 
 impl std::fmt::Debug for SocketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
 impl std::fmt::Display for SocketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Mmap(error) => write!(f, "{}", error),
-            Self::Ring(error) => write!(f, "{}", error),
-            Self::Umem(error) => write!(f, "{}", error),
+            Self::Mmap(error) => write!(f, "{error}"),
+            Self::Ring(error) => write!(f, "{error}"),
+            Self::Umem(error) => write!(f, "{error}"),
             Self::InvalidInterfaceName(error) => {
-                write!(f, "Interface name contains null character(s): {}", error)
+                write!(f, "Interface name contains null character(s): {error}")
             }
-            Self::Initialize(error) => write!(f, "Failed to initialize XDP socket: {}", error),
+            Self::Initialize(error) => write!(f, "Failed to initialize XDP socket: {error}"),
             Self::SocketIsNull => write!(f, "Socket returned null. This is a bug."),
         }
     }
