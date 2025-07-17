@@ -1,11 +1,5 @@
 [workspace]
-members = [
-    "mangonel",
-    "crates/data-plane",
-    "crates/libxdp",
-    "crates/libxdp-sys",
-    "crates/thread",
-]
+members = ["mangonel", "crates/libxdp", "crates/libxdp-sys", "crates/thread"]
 resolver = "2"
 
 [workspace.package]
@@ -15,7 +9,6 @@ edition = "2021"
 rust-version = "1.84"
 
 [workspace.dependencies]
-mangonel-data-plane = { path = "crates/data-plane" }
 mangonel-libxdp = { path = "crates/libxdp" }
 mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
 mangonel-thread = { path = "crates/thread" }
