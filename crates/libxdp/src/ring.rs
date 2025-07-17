@@ -15,6 +15,7 @@ use std::{
 
 pub trait BufferReader<T: Copy> {
     /// Returns the number of filled indices and the current index.
+    /// The number of filled indices are always smaller than or equal to the size.
     fn filled(&self, size: u32) -> (u32, u32);
 
     fn get(&self, index: u32) -> &T;
@@ -24,6 +25,7 @@ pub trait BufferReader<T: Copy> {
 
 pub trait BufferWriter<T: Copy> {
     /// Returns the number of available indices and the current index.
+    /// The number of available indices are always smaller than or equal to the size.
     fn available(&self, size: u32) -> (u32, u32);
 
     fn get_mut(&mut self, index: u32) -> &mut T;
@@ -71,7 +73,6 @@ impl<T: Copy> FreeRing<T> {
             }
             .into(),
         };
-
         let writer = FreeRingWriter::new(ring_buffer.clone());
         let reader = FreeRingReader::new(ring_buffer);
         Ok((writer, reader))
@@ -80,6 +81,7 @@ impl<T: Copy> FreeRing<T> {
     pub fn from_vec(vec: Vec<T>) -> Result<(FreeRingWriter<T>, FreeRingReader<T>), RingError> {
         let capacity = vec.len() as u32;
         let buffer_ptr = Box::into_raw(Box::new(vec));
+
         let ring_buffer = Self {
             inner: FreeRingInner {
                 buffer: NonNull::new(buffer_ptr).ok_or(RingError::Initialize)?,
@@ -89,7 +91,6 @@ impl<T: Copy> FreeRing<T> {
             }
             .into(),
         };
-
         let writer = FreeRingWriter::new(ring_buffer.clone());
         let reader = FreeRingReader::new(ring_buffer);
         Ok((writer, reader))
