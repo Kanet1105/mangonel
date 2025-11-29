@@ -10,3 +10,4 @@ rust-version.workspace = true
 mangonel-libxdp-sys = { workspace = true }
 
 libc = "0.2"
+thiserror = { workspace = true }
