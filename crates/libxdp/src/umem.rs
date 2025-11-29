@@ -1,6 +1,6 @@
 use crate::{
     mmap::Mmap,
-    ring::{CompletionRing, FillRing},
+    ring::{ring_buffer, Consumer, Producer, RingError},
 };
 use mangonel_libxdp_sys::{
     xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
@@ -23,6 +23,8 @@ struct UmemInner {
     mmap: Mmap,
 }
 
+unsafe impl Send for Umem {}
+
 impl Drop for UmemInner {
     /// # Panics
     ///
@@ -40,8 +42,6 @@ impl Drop for UmemInner {
     }
 }
 
-unsafe impl Send for Umem {}
-
 impl Clone for Umem {
     #[inline(always)]
     fn clone(&self) -> Self {
@@ -54,12 +54,10 @@ impl Clone for Umem {
 impl Umem {
     pub fn new(
         mmap: Mmap,
-        fill_ring: &FillRing,
-        completion_ring: &CompletionRing,
         frame_size: u32,
         frame_headroom_size: u32,
         ring_size: u32,
-    ) -> Result<Self, UmemError> {
+    ) -> Result<(Self, Producer, Consumer), UmemError> {
         let mut umem_ptr = null_mut::<xsk_umem>();
         let umem_config = xsk_umem_config {
             fill_size: ring_size,
@@ -68,6 +66,8 @@ impl Umem {
             frame_headroom: frame_headroom_size,
             flags: 0,
         };
+
+        let (fill_ring, completion_ring) = ring_buffer(ring_size)?;
 
         let value = unsafe {
             xsk_umem__create(
@@ -93,11 +93,11 @@ impl Umem {
             }
             .into(),
         };
-        Ok(umem)
+        Ok((umem, fill_ring, completion_ring))
     }
 
     #[inline(always)]
-    pub fn umem_config(&self) -> &xsk_umem_config {
+    pub fn config(&self) -> &xsk_umem_config {
         &self.inner.umem_config
     }
 
@@ -112,26 +112,14 @@ impl Umem {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
 pub enum UmemError {
+    #[error("Failed to initialize Umem: {0}")]
     Initialize(std::io::Error),
+    #[error("Umem returned null. This is a bug.")]
     UmemIsNull,
+    #[error("Failed to free Umem: {0}")]
     Free(std::io::Error),
+    #[error(transparent)]
+    Ring(#[from] RingError),
 }
-
-impl std::fmt::Debug for UmemError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self}")
-    }
-}
-
-impl std::fmt::Display for UmemError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Initialize(error) => write!(f, "Failed to initialize Umem: {error}"),
-            Self::UmemIsNull => write!(f, "Umem returned null. This is a bug."),
-            Self::Free(error) => write!(f, "Failed to free Umem: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for UmemError {}

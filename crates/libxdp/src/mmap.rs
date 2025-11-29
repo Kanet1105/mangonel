@@ -60,26 +60,12 @@ impl Mmap {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
 pub enum MmapError {
+    #[error("Failed to initialize Mmap: {0}")]
     Initialize(std::io::Error),
+    #[error("Mmap returned Null. This is a bug.")]
     MmapIsNull,
+    #[error("Failed to free Mmap: {0}")]
     Free(std::io::Error),
 }
-
-impl std::fmt::Debug for MmapError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self}")
-    }
-}
-
-impl std::fmt::Display for MmapError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Initialize(error) => write!(f, "Failed to initialize Mmap: {error}"),
-            Self::MmapIsNull => write!(f, "Mmap returned null. This is a bug."),
-            Self::Free(error) => write!(f, "Failed to free Mmap: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for MmapError {}
