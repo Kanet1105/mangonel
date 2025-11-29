@@ -1,5 +1,5 @@
 [workspace]
-members = ["mangonel", "crates/libxdp", "crates/libxdp-sys", "crates/thread"]
+members = ["crates/libxdp", "crates/libxdp-sys", "crates/thread", "mangonel"]
 resolver = "2"
 
 [workspace.package]
@@ -14,5 +14,6 @@ mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
 mangonel-thread = { path = "crates/thread" }
 
 getrandom = "0.3.3"
+thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false }
