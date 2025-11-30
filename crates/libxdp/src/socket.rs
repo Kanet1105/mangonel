@@ -49,7 +49,7 @@ impl SocketBuilder {
         self,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(TxSocket, RxSocket, Umem), SocketError> {
+    ) -> Result<(TxSocket, RxSocket, Umem), Error> {
         Socket::init(
             self.frame_size,
             self.frame_headroom_size,
@@ -96,7 +96,7 @@ impl Socket {
         force_zero_copy: bool,
         interface_name: impl AsRef<str>,
         queue_id: u32,
-    ) -> Result<(TxSocket, RxSocket, Umem), SocketError> {
+    ) -> Result<(TxSocket, RxSocket, Umem), Error> {
         // Increase the maximum size of the process's virtual memory.
         util::setrlimit();
 
@@ -112,7 +112,7 @@ impl Socket {
         let mut socket = null_mut();
 
         let interface_name =
-            CString::new(interface_name.as_ref()).map_err(SocketError::InvalidInterfaceName)?;
+            CString::new(interface_name.as_ref()).map_err(Error::InvalidInterfaceName)?;
 
         let mut xdp_flags = 0;
         match force_zero_copy {
@@ -142,13 +142,11 @@ impl Socket {
             )
         };
         if value.is_negative() {
-            return Err(SocketError::Initialize(std::io::Error::from_raw_os_error(
-                -value,
-            )));
+            return Err(Error::Initialize(std::io::Error::from_raw_os_error(-value)));
         }
 
         let socket = Self {
-            inner: SocketInner(NonNull::new(socket).ok_or(SocketError::SocketIsNull)?).into(),
+            inner: SocketInner(NonNull::new(socket).ok_or(Error::SocketIsNull)?).into(),
         };
 
         // Prefill the descriptor buffer.
@@ -295,13 +293,13 @@ impl RxSocket {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum SocketError {
+pub enum Error {
     #[error(transparent)]
     Mmap(#[from] MmapError),
     #[error(transparent)]
-    Ring(#[from] RingError),
-    #[error(transparent)]
     Umem(#[from] UmemError),
+    #[error(transparent)]
+    Ring(#[from] RingError),
     #[error("Interface name contains null character(s): {0}")]
     InvalidInterfaceName(NulError),
     #[error("Failed to initialize socket: {0}")]
