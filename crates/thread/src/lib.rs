@@ -57,10 +57,10 @@ impl std::error::Error for ThreadError {}
 
 #[cfg(test)]
 mod test {
-    use crate::{spawn, ThreadError};
+    use crate::{ThreadError, spawn};
     use std::{
         thread,
-        thread::{sleep, JoinHandle},
+        thread::{JoinHandle, sleep},
         time::Duration,
     };
 

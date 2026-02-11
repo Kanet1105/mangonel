@@ -1,9 +1,9 @@
 use libc::{
-    mmap, munmap, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_PRIVATE, PROT_READ, PROT_WRITE,
+    MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_PRIVATE, PROT_READ, PROT_WRITE, mmap, munmap,
 };
 use std::{
     ffi::c_void,
-    ptr::{null_mut, NonNull},
+    ptr::{NonNull, null_mut},
 };
 
 #[derive(Debug)]
