@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    # "crates/libxdp",
-    # "crates/libxdp-sys",
+    "crates/libxdp",
+    "crates/libxdp-sys",
     "crates/nic",
     "crates/thread",
     "crates/util",
@@ -16,10 +16,11 @@ edition = "2024"
 rust-version = "1.88"
 
 [workspace.dependencies]
-# mangonel-libxdp = { path = "crates/libxdp" }
-# mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
+mangonel-libxdp = { path = "crates/libxdp" }
+mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
 mangonel-nic = { path = "crates/nic" }
 mangonel-thread = { path = "crates/thread" }
+mangonel-util = { path = "crates/util" }
 
 getrandom = "0.3.3"
 libc = "0.2"
