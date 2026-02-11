@@ -1,12 +1,11 @@
 [package]
-name = "mangonel-libxdp-sys"
+name = "mangonel-util"
 version = "0.1.0"
 authors = { workspace = true }
 license = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
 
-[build-dependencies]
-mangonel-util = { workspace = true }
-
-bindgen = "0.71"
+[dependencies]
+libc = { workspace = true }
+thiserror = { workspace = true }

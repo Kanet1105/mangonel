@@ -1,13 +1,13 @@
 use crate::{
     mmap::Mmap,
-    ring::{ring_buffer, Consumer, Producer, RingError},
+    ring::{Consumer, Producer, RingError, ring_buffer},
 };
 use mangonel_libxdp_sys::{
     xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
 };
 use std::{
     ffi::c_void,
-    ptr::{null_mut, NonNull},
+    ptr::{NonNull, null_mut},
     sync::Arc,
 };
 

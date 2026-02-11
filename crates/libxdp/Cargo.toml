@@ -9,5 +9,5 @@ rust-version = { workspace = true }
 [dependencies]
 mangonel-libxdp-sys = { workspace = true }
 
-libc = "0.2"
+libc = { workspace = true }
 thiserror = { workspace = true }
