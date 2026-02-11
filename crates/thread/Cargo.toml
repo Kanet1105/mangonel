@@ -1,10 +1,10 @@
 [package]
 name = "mangonel-thread"
 version = "0.1.0"
-authors.workspace = true
-license.workspace = true
-edition.workspace = true
-rust-version.workspace = true
+authors = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [dependencies]
 core_affinity = "0.8.3"
