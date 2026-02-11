@@ -7,4 +7,6 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [build-dependencies]
+mangonel-util = { workspace = true }
+
 bindgen = "0.71"
