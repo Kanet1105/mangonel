@@ -1,9 +1,10 @@
 [workspace]
 members = [
-    "crates/libxdp",
-    "crates/libxdp-sys",
+    # "crates/libxdp",
+    # "crates/libxdp-sys",
     "crates/nic",
     "crates/thread",
+    "crates/util",
     "mangonel",
 ]
 resolver = "3"
@@ -12,15 +13,16 @@ resolver = "3"
 authors = ["Donghoon Lee <zombiedelah@gmail.com>"]
 license = "BSD-3-Clause"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.88"
 
 [workspace.dependencies]
-mangonel-libxdp = { path = "crates/libxdp" }
-mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
+# mangonel-libxdp = { path = "crates/libxdp" }
+# mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
 mangonel-nic = { path = "crates/nic" }
 mangonel-thread = { path = "crates/thread" }
 
 getrandom = "0.3.3"
+libc = "0.2"
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false }
