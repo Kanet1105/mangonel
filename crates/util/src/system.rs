@@ -1,6 +1,5 @@
 use std::{
     ffi::{CStr, CString},
-    fs,
     path::{Path, PathBuf},
 };
 
@@ -79,7 +78,7 @@ fn parse_ld_so_conf(
     path: &std::path::Path,
     paths: &mut Vec<std::path::PathBuf>,
 ) -> Result<(), SystemInfoError> {
-    let contents = match fs::read_to_string(path) {
+    let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return Ok(()), // Silently skip missing files.
     };
@@ -130,6 +129,63 @@ fn glob_paths(pattern: &str) -> Result<Vec<std::path::PathBuf>, SystemInfoError>
     result
 }
 
+/// Returns the default C/C++ header search paths on Linux.
+///
+/// Queries the C preprocessor (`cpp -v`) to discover the system's default
+/// include search directories, then appends standard fallback paths.
+pub fn default_include_paths() -> Result<Vec<PathBuf>, SystemInfoError> {
+    let mut paths = Vec::new();
+
+    // Query the C preprocessor for its default include search paths.
+    let output = std::process::Command::new("cpp")
+        .args(["-v", "/dev/null", "-o", "/dev/null"])
+        .output()
+        .map_err(|_| SystemInfoError::IncludePathsNotFound)?;
+
+    // cpp prints the include search paths to stderr between
+    // "#include <...> search starts here:" and "End of search list."
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut in_search_list = false;
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if trimmed == "#include <...> search starts here:" {
+            in_search_list = true;
+            continue;
+        }
+        if trimmed == "End of search list." {
+            break;
+        }
+        if in_search_list {
+            let p = PathBuf::from(trimmed);
+            if p.is_dir() && !paths.contains(&p) {
+                paths.push(p);
+            }
+        }
+    }
+
+    // Append standard fallback include paths.
+    for default in &["/usr/include", "/usr/local/include"] {
+        let p = PathBuf::from(default);
+        if p.is_dir() && !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+
+    // Append the multiarch include path (e.g. /usr/include/x86_64-linux-gnu).
+    let mut utsname = unsafe { std::mem::zeroed::<libc::utsname>() };
+    if unsafe { libc::uname(&mut utsname) } == 0 {
+        let machine = unsafe { CStr::from_ptr(utsname.machine.as_ptr()) }
+            .to_str()
+            .unwrap_or("");
+        let multiarch = PathBuf::from(format!("/usr/include/{machine}-linux-gnu"));
+        if multiarch.is_dir() && !paths.contains(&multiarch) {
+            paths.push(multiarch);
+        }
+    }
+
+    Ok(paths)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SystemInfoError {
     #[error("Unsupported OS. Currently supports Linux only")]
@@ -142,10 +198,18 @@ pub enum SystemInfoError {
     UnsupportedKernelVersion { major: u32, minor: u32 },
     #[error("Failed to expand glob pattern")]
     GlobExpansionFailed,
+    #[error("Failed to find default include paths")]
+    IncludePathsNotFound,
 }
 
 #[test]
 fn test_default_library_paths() {
     let paths = default_library_paths().unwrap();
+    println!("{:?}", paths);
+}
+
+#[test]
+fn test_default_include_paths() {
+    let paths = default_include_paths().unwrap();
     println!("{:?}", paths);
 }
