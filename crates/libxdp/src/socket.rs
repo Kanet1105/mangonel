@@ -172,6 +172,7 @@ impl Socket {
             rx_ring,
             descriptor_reader,
         };
+
         Ok((tx_socket, rx_socket, umem))
     }
 

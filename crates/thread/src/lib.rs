@@ -30,6 +30,7 @@ where
             panic!("Unable to pin the thread to {core_id:?}. This is a bug.");
         }
     });
+
     Ok(handle)
 }
 
