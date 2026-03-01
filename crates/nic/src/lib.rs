@@ -26,6 +26,7 @@ impl std::fmt::Debug for NetworkInterface {
         for ipv6 in &self.ipv6 {
             writeln!(f, "\tIPv6: {ipv6}")?;
         }
+
         Ok(())
     }
 }
@@ -35,6 +36,7 @@ impl NetworkInterface {
     pub fn get_default() -> Result<Self, Error> {
         let default_iface =
             default_net::get_default_interface().map_err(Error::DefaultInterface)?;
+
         let iface = NetworkInterface {
             name: default_iface.name,
             index: default_iface.index,
@@ -44,6 +46,7 @@ impl NetworkInterface {
             ipv4: default_iface.ipv4.iter().map(|ipv4| ipv4.addr).collect(),
             ipv6: default_iface.ipv6.iter().map(|ipv6| ipv6.addr).collect(),
         };
+
         Ok(iface)
     }
 
@@ -66,10 +69,12 @@ impl NetworkInterface {
             .arg(queue_count.to_string())
             .output()
             .map_err(|error| Error::Ethtool(error.to_string()))?;
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Error::Ethtool(stderr.to_string()));
         }
+
         Ok(())
     }
 
@@ -86,6 +91,7 @@ impl NetworkInterface {
             .arg(&self.name)
             .output()
             .map_err(|error| Error::Ethtool(error.to_string()))?;
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(Error::Ethtool(stderr.to_string()));
@@ -109,6 +115,7 @@ impl NetworkInterface {
                 }
             }
         }
+
         Err(Error::Ethtool(
             "Could not find Combined queue count in ethtool output".to_owned(),
         ))

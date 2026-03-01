@@ -38,6 +38,7 @@ impl Mmap {
         if address == MAP_FAILED {
             return Err(MmapError::Initialize(std::io::Error::last_os_error()));
         }
+
         Ok(Self {
             address: NonNull::new(address).ok_or(MmapError::MmapIsNull)?,
             length,

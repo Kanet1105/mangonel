@@ -126,6 +126,7 @@ fn glob_paths(pattern: &str) -> Result<Vec<std::path::PathBuf>, SystemInfoError>
     };
 
     unsafe { libc::globfree(&mut glob_buf) };
+
     result
 }
 

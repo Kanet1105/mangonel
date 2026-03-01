@@ -93,6 +93,7 @@ impl Umem {
             }
             .into(),
         };
+
         Ok((umem, fill_ring, completion_ring))
     }
 
