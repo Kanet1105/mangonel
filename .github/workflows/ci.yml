@@ -37,7 +37,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
             --default-toolchain 1.88.0 \
             --profile minimal \
-            --component clippy rustfmt
+            --component clippy
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install nightly (for fmt)
