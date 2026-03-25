@@ -4,36 +4,36 @@ use mangonel_libxdp_sys::{
     xsk_ring_cons__rx_desc, xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve,
     xsk_ring_prod__submit, xsk_ring_prod__tx_desc,
 };
-use std::{mem::MaybeUninit, ptr::NonNull};
+use std::mem::MaybeUninit;
 
 pub fn ring_buffer(size: u32) -> Result<(Producer, Consumer), RingError> {
     if !is_power_of_two(size) {
         return Err(RingError::IsNotPowerOfTwo(size));
     }
 
-    let ring = unsafe { MaybeUninit::<xsk_ring_prod>::zeroed().assume_init() };
-    let ring_ptr = Box::into_raw(Box::new(ring));
     let producer = Producer {
-        head: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
+        head: Box::new(MaybeUninit::<xsk_ring_prod>::zeroed()),
     };
 
-    let ring = unsafe { MaybeUninit::<xsk_ring_cons>::zeroed().assume_init() };
-    let ring_ptr = Box::into_raw(Box::new(ring));
     let consumer = Consumer {
-        tail: NonNull::new(ring_ptr).ok_or(RingError::Initialize)?,
+        tail: Box::new(MaybeUninit::<xsk_ring_cons>::zeroed()),
     };
 
     Ok((producer, consumer))
 }
 
+/// Ring producer handle.
+///
+/// The inner `MaybeUninit` is zero-initialized here and later populated by
+/// `xsk_umem__create` or `xsk_socket__create` before any reads occur.
 pub struct Producer {
-    head: NonNull<xsk_ring_prod>,
+    head: Box<MaybeUninit<xsk_ring_prod>>,
 }
 
 impl Producer {
     #[inline(always)]
     pub fn as_ptr(&self) -> *mut xsk_ring_prod {
-        self.head.as_ptr()
+        self.head.as_ptr() as *mut _
     }
 
     #[inline(always)]
@@ -67,14 +67,18 @@ impl Producer {
     }
 }
 
+/// Ring consumer handle.
+///
+/// The inner `MaybeUninit` is zero-initialized here and later populated by
+/// `xsk_umem__create` or `xsk_socket__create` before any reads occur.
 pub struct Consumer {
-    tail: NonNull<xsk_ring_cons>,
+    tail: Box<MaybeUninit<xsk_ring_cons>>,
 }
 
 impl Consumer {
     #[inline(always)]
     pub fn as_ptr(&self) -> *mut xsk_ring_cons {
-        self.tail.as_ptr()
+        self.tail.as_ptr() as *mut _
     }
 
     #[inline(always)]
