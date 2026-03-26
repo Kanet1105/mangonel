@@ -226,8 +226,8 @@ impl TxSocket {
         let (filled, index) = self.completion_ring.peek(size);
         let mut offset: u32 = 0;
         while offset < filled {
-            let descriptor = self.completion_ring.descriptor(index + offset);
-            match self.descriptor_writer.try_send(descriptor.addr) {
+            let address = self.completion_ring.completion_address(index + offset);
+            match self.descriptor_writer.try_send(*address) {
                 Err(TrySendError::Full(_)) => break,
                 Err(TrySendError::Disconnected(_)) => {
                     panic!("Descriptor sender disconnected. This is a bug.");
