@@ -68,8 +68,10 @@ pub struct Socket {
 
 struct SocketInner(NonNull<xsk_socket>);
 
+// SAFETY: SocketInner is only accessed via xsk_socket__fd (read-only) and
+// xsk_socket__delete (in Drop, which runs only after all Arc refs are gone).
+// The thread-unsafe ring buffers live in TxSocket/RxSocket, not here.
 unsafe impl Send for SocketInner {}
-
 unsafe impl Sync for SocketInner {}
 
 impl Drop for SocketInner {

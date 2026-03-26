@@ -23,6 +23,10 @@ struct UmemInner {
     mmap: Mmap,
 }
 
+// SAFETY: Umem is sent between threads so that both TxSocket and RxSocket
+// (on different threads) can read packet data from the shared mmap region.
+// The mmap pointer is stable for the lifetime of the Umem, and concurrent
+// reads into non-overlapping frame regions are safe.
 unsafe impl Send for Umem {}
 
 impl Drop for UmemInner {
