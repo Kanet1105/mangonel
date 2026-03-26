@@ -68,8 +68,10 @@ pub struct Socket {
 
 struct SocketInner(NonNull<xsk_socket>);
 
+// SAFETY: SocketInner is only accessed via xsk_socket__fd (read-only) and
+// xsk_socket__delete (in Drop, which runs only after all Arc refs are gone).
+// The thread-unsafe ring buffers live in TxSocket/RxSocket, not here.
 unsafe impl Send for SocketInner {}
-
 unsafe impl Sync for SocketInner {}
 
 impl Drop for SocketInner {
@@ -79,7 +81,7 @@ impl Drop for SocketInner {
 }
 
 impl Clone for Socket {
-    #[inline(always)]
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -98,7 +100,7 @@ impl Socket {
         queue_id: u32,
     ) -> Result<(TxSocket, RxSocket, Umem), SocketError> {
         // Increase the maximum size of the process's virtual memory.
-        util::setrlimit();
+        util::setrlimit().map_err(SocketError::Setrlimit)?;
 
         // Initialize the memory map.
         let length = (frame_size + frame_headroom_size) * ring_size;
@@ -176,7 +178,7 @@ impl Socket {
         Ok((tx_socket, rx_socket, umem))
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn socket_fd(&self) -> i32 {
         unsafe { xsk_socket__fd(self.inner.0.as_ptr()) }
     }
@@ -190,9 +192,9 @@ pub struct TxSocket {
 }
 
 impl TxSocket {
-    #[inline(always)]
+    #[inline]
     pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
-        let size = self.ring_size.max(buffer.len() as u32);
+        let size = self.ring_size.min(buffer.len() as u32);
         let (tx_available, tx_index) = self.tx_ring.reserve(size);
         let mut offset: u32 = 0;
         while offset < tx_available {
@@ -207,7 +209,7 @@ impl TxSocket {
         offset
     }
 
-    #[inline(always)]
+    #[inline]
     fn send(&mut self) {
         unsafe {
             sendto(
@@ -221,13 +223,13 @@ impl TxSocket {
         };
     }
 
-    #[inline(always)]
+    #[inline]
     fn complete(&mut self, size: u32) {
         let (filled, index) = self.completion_ring.peek(size);
         let mut offset: u32 = 0;
         while offset < filled {
-            let descriptor = self.completion_ring.descriptor(index + offset);
-            match self.descriptor_writer.try_send(descriptor.addr) {
+            let address = self.completion_ring.completion_address(index + offset);
+            match self.descriptor_writer.try_send(*address) {
                 Err(TrySendError::Full(_)) => break,
                 Err(TrySendError::Disconnected(_)) => {
                     panic!("Descriptor sender disconnected. This is a bug.");
@@ -248,9 +250,9 @@ pub struct RxSocket {
 }
 
 impl RxSocket {
-    #[inline(always)]
+    #[inline]
     pub fn read(&mut self, buffer: &mut [Descriptor]) -> u32 {
-        let size = self.ring_size.max(buffer.len() as u32);
+        let size = self.ring_size.min(buffer.len() as u32);
         self.fill(size);
         self.poll();
         let (availble, index) = self.rx_ring.peek(size);
@@ -265,7 +267,7 @@ impl RxSocket {
         offset
     }
 
-    #[inline(always)]
+    #[inline]
     fn fill(&mut self, size: u32) {
         let (available, index) = self.fill_ring.reserve(size);
         let mut offset: u32 = 0;
@@ -284,7 +286,7 @@ impl RxSocket {
         self.fill_ring.submit(offset);
     }
 
-    #[inline(always)]
+    #[inline]
     fn poll(&mut self) {
         let mut poll_fd_struct = pollfd {
             fd: self.socket.socket_fd(),
@@ -309,4 +311,6 @@ pub enum SocketError {
     Initialize(std::io::Error),
     #[error("Socket returned Null. This is a bug.")]
     SocketIsNull,
+    #[error("Failed to set RLIMIT_MEMLOCK (try running as root): {0}")]
+    Setrlimit(std::io::Error),
 }

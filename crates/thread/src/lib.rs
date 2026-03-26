@@ -34,27 +34,13 @@ where
     Ok(handle)
 }
 
+#[derive(Debug, thiserror::Error)]
 pub enum ThreadError {
+    #[error("Unable to get core IDs")]
     UnableToGetCoreIds,
+    #[error("Invalid core ID: {0}")]
     InvalidCoreId(usize),
 }
-
-impl std::fmt::Debug for ThreadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnableToGetCoreIds => write!(f, "Unable to get core IDs"),
-            Self::InvalidCoreId(core_id) => write!(f, "Invalid core ID: {core_id}"),
-        }
-    }
-}
-
-impl std::fmt::Display for ThreadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl std::error::Error for ThreadError {}
 
 #[cfg(test)]
 mod test {
