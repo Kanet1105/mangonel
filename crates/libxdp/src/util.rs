@@ -1,11 +1,3 @@
-pub fn is_power_of_two(size: u32) -> bool {
-    if size == 0 {
-        return false;
-    }
-
-    (size & (size - 1)) == 0
-}
-
 pub fn setrlimit() -> Result<(), std::io::Error> {
     let value = unsafe {
         let rlimit = libc::rlimit {

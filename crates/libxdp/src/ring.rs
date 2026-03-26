@@ -1,4 +1,3 @@
-use crate::util::is_power_of_two;
 use mangonel_libxdp_sys::{
     xdp_desc, xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release,
     xsk_ring_cons__rx_desc, xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve,
@@ -7,7 +6,7 @@ use mangonel_libxdp_sys::{
 use std::mem::MaybeUninit;
 
 pub fn ring_buffer(size: u32) -> Result<(Producer, Consumer), RingError> {
-    if !is_power_of_two(size) {
+    if !size.is_power_of_two() {
         return Err(RingError::IsNotPowerOfTwo(size));
     }
 
