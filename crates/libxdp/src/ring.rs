@@ -30,6 +30,12 @@ pub struct Producer {
     head: Box<MaybeUninit<xsk_ring_prod>>,
 }
 
+// SAFETY: A Producer is exclusively owned by a single TxSocket or RxSocket and
+// is never shared. The raw pointers inside xsk_ring_prod point into a
+// kernel-mapped ring that is safe to access from any thread, provided there is
+// no concurrent access — which is guaranteed by &mut self on mutating methods.
+unsafe impl Send for Producer {}
+
 impl Producer {
     #[inline(always)]
     pub fn as_ptr(&self) -> *mut xsk_ring_prod {
@@ -74,6 +80,9 @@ impl Producer {
 pub struct Consumer {
     tail: Box<MaybeUninit<xsk_ring_cons>>,
 }
+
+// SAFETY: Same reasoning as Producer — exclusively owned, no concurrent access.
+unsafe impl Send for Consumer {}
 
 impl Consumer {
     #[inline(always)]
