@@ -81,7 +81,7 @@ impl Drop for SocketInner {
 }
 
 impl Clone for Socket {
-    #[inline(always)]
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -178,7 +178,7 @@ impl Socket {
         Ok((tx_socket, rx_socket, umem))
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn socket_fd(&self) -> i32 {
         unsafe { xsk_socket__fd(self.inner.0.as_ptr()) }
     }
@@ -192,7 +192,7 @@ pub struct TxSocket {
 }
 
 impl TxSocket {
-    #[inline(always)]
+    #[inline]
     pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
         let size = self.ring_size.min(buffer.len() as u32);
         let (tx_available, tx_index) = self.tx_ring.reserve(size);
@@ -209,7 +209,7 @@ impl TxSocket {
         offset
     }
 
-    #[inline(always)]
+    #[inline]
     fn send(&mut self) {
         unsafe {
             sendto(
@@ -223,7 +223,7 @@ impl TxSocket {
         };
     }
 
-    #[inline(always)]
+    #[inline]
     fn complete(&mut self, size: u32) {
         let (filled, index) = self.completion_ring.peek(size);
         let mut offset: u32 = 0;
@@ -250,7 +250,7 @@ pub struct RxSocket {
 }
 
 impl RxSocket {
-    #[inline(always)]
+    #[inline]
     pub fn read(&mut self, buffer: &mut [Descriptor]) -> u32 {
         let size = self.ring_size.min(buffer.len() as u32);
         self.fill(size);
@@ -267,7 +267,7 @@ impl RxSocket {
         offset
     }
 
-    #[inline(always)]
+    #[inline]
     fn fill(&mut self, size: u32) {
         let (available, index) = self.fill_ring.reserve(size);
         let mut offset: u32 = 0;
@@ -286,7 +286,7 @@ impl RxSocket {
         self.fill_ring.submit(offset);
     }
 
-    #[inline(always)]
+    #[inline]
     fn poll(&mut self) {
         let mut poll_fd_struct = pollfd {
             fd: self.socket.socket_fd(),

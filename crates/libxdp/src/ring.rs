@@ -36,19 +36,19 @@ pub struct Producer {
 unsafe impl Send for Producer {}
 
 impl Producer {
-    #[inline(always)]
+    #[inline]
     pub fn as_ptr(&self) -> *mut xsk_ring_prod {
         self.head.as_ptr() as *mut _
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn reserve(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
         (available, index)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn descriptor(&mut self, index: u32) -> &mut xdp_desc {
         unsafe {
             xsk_ring_prod__tx_desc(self.as_ptr(), index)
@@ -57,7 +57,7 @@ impl Producer {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn fill_address(&mut self, index: u32) -> &mut u64 {
         unsafe {
             xsk_ring_prod__fill_addr(self.as_ptr(), index)
@@ -66,7 +66,7 @@ impl Producer {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn submit(&self, offset: u32) {
         unsafe { xsk_ring_prod__submit(self.as_ptr(), offset) };
     }
@@ -84,19 +84,19 @@ pub struct Consumer {
 unsafe impl Send for Consumer {}
 
 impl Consumer {
-    #[inline(always)]
+    #[inline]
     pub fn as_ptr(&self) -> *mut xsk_ring_cons {
         self.tail.as_ptr() as *mut _
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn peek(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
         (filled, index)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn descriptor(&self, index: u32) -> &xdp_desc {
         unsafe {
             xsk_ring_cons__rx_desc(self.as_ptr(), index)
@@ -105,7 +105,7 @@ impl Consumer {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn completion_address(&self, index: u32) -> &u64 {
         unsafe {
             xsk_ring_cons__comp_addr(self.as_ptr(), index)
@@ -114,7 +114,7 @@ impl Consumer {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn release(&self, offset: u32) {
         unsafe { xsk_ring_cons__release(self.as_ptr(), offset) };
     }

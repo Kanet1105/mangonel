@@ -8,7 +8,7 @@ pub struct Descriptor {
 }
 
 impl Descriptor {
-    #[inline(always)]
+    #[inline]
     pub fn as_slice<'a>(&self, umem: &'a Umem) -> &'a [u8] {
         let headroom_size = umem.config().frame_headroom;
         let address = self.address - headroom_size as u64;
@@ -18,7 +18,7 @@ impl Descriptor {
         unsafe { std::slice::from_raw_parts(offset, length as usize) }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn as_slice_mut<'a>(&mut self, umem: &'a Umem) -> &'a mut [u8] {
         let headroom_size = umem.config().frame_headroom;
         let address = self.address - headroom_size as u64;

@@ -47,7 +47,7 @@ impl Drop for UmemInner {
 }
 
 impl Clone for Umem {
-    #[inline(always)]
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -101,17 +101,17 @@ impl Umem {
         Ok((umem, fill_ring, completion_ring))
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn config(&self) -> &xsk_umem_config {
         &self.inner.umem_config
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn as_ptr(&self) -> *mut xsk_umem {
         self.inner.umem.as_ptr()
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_data(&self, address: u64) -> *mut c_void {
         unsafe { xsk_umem__get_data(self.inner.mmap.as_ptr(), address) }
     }

@@ -51,12 +51,12 @@ impl Mmap {
         })
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn as_ptr(&self) -> *mut c_void {
         self.address.as_ptr()
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn length(&self) -> usize {
         self.length
     }
