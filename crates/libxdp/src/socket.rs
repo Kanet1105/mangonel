@@ -98,7 +98,7 @@ impl Socket {
         queue_id: u32,
     ) -> Result<(TxSocket, RxSocket, Umem), SocketError> {
         // Increase the maximum size of the process's virtual memory.
-        util::setrlimit();
+        util::setrlimit().map_err(SocketError::Setrlimit)?;
 
         // Initialize the memory map.
         let length = (frame_size + frame_headroom_size) * ring_size;
@@ -309,4 +309,6 @@ pub enum SocketError {
     Initialize(std::io::Error),
     #[error("Socket returned Null. This is a bug.")]
     SocketIsNull,
+    #[error("Failed to set RLIMIT_MEMLOCK (try running as root): {0}")]
+    Setrlimit(std::io::Error),
 }
