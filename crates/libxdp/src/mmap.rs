@@ -57,11 +57,6 @@ impl Mmap {
     }
 
     #[inline(always)]
-    pub fn offset(&self, count: isize) -> *mut c_void {
-        unsafe { self.as_ptr().offset(count) }
-    }
-
-    #[inline(always)]
     pub fn length(&self) -> usize {
         self.length
     }
