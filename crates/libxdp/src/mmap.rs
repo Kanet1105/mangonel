@@ -12,6 +12,12 @@ pub struct Mmap {
     length: usize,
 }
 
+// SAFETY: The mmap'd region is process-wide virtual memory with no thread
+// affinity in Linux. The address is stable for the lifetime of the Mmap.
+// Concurrent access to non-overlapping frame regions (TX vs RX) is safe.
+unsafe impl Send for Mmap {}
+unsafe impl Sync for Mmap {}
+
 impl Drop for Mmap {
     /// # Panics
     ///
