@@ -192,7 +192,7 @@ pub struct TxSocket {
 impl TxSocket {
     #[inline(always)]
     pub fn write(&mut self, buffer: &[Descriptor]) -> u32 {
-        let size = self.ring_size.max(buffer.len() as u32);
+        let size = self.ring_size.min(buffer.len() as u32);
         let (tx_available, tx_index) = self.tx_ring.reserve(size);
         let mut offset: u32 = 0;
         while offset < tx_available {
@@ -250,7 +250,7 @@ pub struct RxSocket {
 impl RxSocket {
     #[inline(always)]
     pub fn read(&mut self, buffer: &mut [Descriptor]) -> u32 {
-        let size = self.ring_size.max(buffer.len() as u32);
+        let size = self.ring_size.min(buffer.len() as u32);
         self.fill(size);
         self.poll();
         let (availble, index) = self.rx_ring.peek(size);
