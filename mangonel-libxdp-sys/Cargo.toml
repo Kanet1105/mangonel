@@ -1,0 +1,12 @@
+[package]
+name = "mangonel-libxdp-sys"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+links = "xdp"
+
+[build-dependencies]
+bindgen = "0.72"
+
+[lints]
+workspace = true
