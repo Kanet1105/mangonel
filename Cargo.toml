@@ -1,29 +1,45 @@
 [workspace]
-members = [
-    "crates/libxdp",
-    "crates/libxdp-sys",
-    "crates/nic",
-    "crates/thread",
-    "crates/util",
-    "mangonel",
-]
 resolver = "3"
+members = [
+    "mangonel",
+    "mangonel-cli",
+    "mangonel-client",
+    "mangonel-control-plane",
+    "mangonel-libxdp",
+    "mangonel-libxdp-sys",
+    "mangonel-nic",
+]
 
+# Matches libxdp, which mangonel links against. See LICENSE.
 [workspace.package]
-authors = ["Donghoon Lee <zombiedelah@gmail.com>"]
-license = "BSD-3-Clause"
-edition = "2024"
-rust-version = "1.88"
+license = "LGPL-2.1 OR BSD-2-Clause"
 
 [workspace.dependencies]
-mangonel-libxdp = { path = "crates/libxdp" }
-mangonel-libxdp-sys = { path = "crates/libxdp-sys" }
-mangonel-nic = { path = "crates/nic" }
-mangonel-thread = { path = "crates/thread" }
-mangonel-util = { path = "crates/util" }
+mangonel-cli = { path = "mangonel-cli" }
+mangonel-client = { path = "mangonel-client" }
+mangonel-control-plane = { path = "mangonel-control-plane" }
+mangonel-libxdp = { path = "mangonel-libxdp" }
+mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
+mangonel-nic = { path = "mangonel-nic" }
 
-getrandom = "0.3.3"
+arc-swap = "1"
+axum = { version = "0.8", default-features = false }
+clap = { version = "4.6", features = ["derive"] }
+dioxus = { version = "0.7", default-features = false }
 libc = "0.2"
-thiserror = "1.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false }
+pnet_packet = "0.35"
+rtrb = "0.3"
+rusqlite = { version = "0.40", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1", default-features = false }
+
+# Numeric conversions in these crates cross kernel ABI widths (u32 ring
+# indices, u64 umem addresses, usize lengths), so every lossy or
+# platform-dependent cast should be deliberate rather than incidental.
+[workspace.lints.clippy]
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
