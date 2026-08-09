@@ -1,6 +1,6 @@
 use crate::umem::Umem;
 
-/// A received frame's handle: where the packet lives in the
+/// A received frame's handle: where the frame lives in the
 /// umem and how many bytes it occupies.
 ///
 /// Only `XdpReceiver::receive` mints descriptors; fields
@@ -11,9 +11,9 @@ use crate::umem::Umem;
 /// [`Self::as_slice_mut`] sound.
 #[derive(Debug, Default)]
 pub struct XdpDescriptor {
-    /// Offset of the packet data within the umem region.
+    /// Offset of the frame within the umem region.
     pub(crate) address: u64,
-    /// Packet length in bytes.
+    /// Frame length in bytes.
     pub(crate) length: u32,
     /// Id of the minting umem; 0 when empty. Ids are never
     /// reused, so a stale descriptor cannot be
@@ -25,8 +25,8 @@ pub struct XdpDescriptor {
 }
 
 impl XdpDescriptor {
-    /// Packet length in bytes. The slices are longer: they
-    /// include the frame headroom ahead of the packet.
+    /// Frame length in bytes. The slices are longer: they
+    /// include the headroom ahead of the frame.
     pub fn length(&self) -> u32 {
         self.length
     }
@@ -42,7 +42,8 @@ impl XdpDescriptor {
         );
     }
 
-    /// A shared view of the frame: headroom, then packet.
+    /// A shared view of the buffer: headroom, then the
+    /// frame.
     ///
     /// Borrowing `self` keeps the descriptor out of `send`
     /// while the slice lives.
@@ -72,8 +73,8 @@ impl XdpDescriptor {
         unsafe { std::slice::from_raw_parts(offset, length) }
     }
 
-    /// An exclusive view of the frame: headroom, then
-    /// packet.
+    /// An exclusive view of the buffer: headroom, then the
+    /// frame.
     ///
     /// # Panics
     ///
@@ -97,22 +98,25 @@ impl XdpDescriptor {
         unsafe { std::slice::from_raw_parts_mut(offset, length) }
     }
 
-    /// The packet alone, headroom skipped.
+    /// The received bytes — the frame, headroom skipped.
+    /// What a caller parsing what arrived wants;
+    /// [`Self::as_slice`] starts at the headroom
+    /// instead, for a caller prepending.
     ///
     /// # Panics
     ///
     /// As [`Self::as_slice`].
-    pub fn packet<'a>(&'a self, umem: &'a Umem) -> &'a [u8] {
+    pub fn data<'a>(&'a self, umem: &'a Umem) -> &'a [u8] {
         let headroom = umem.config().frame_headroom as usize;
         &self.as_slice(umem)[headroom..]
     }
 
-    /// The packet alone, exclusive, headroom skipped.
+    /// The received bytes, exclusive, headroom skipped.
     ///
     /// # Panics
     ///
     /// As [`Self::as_slice`].
-    pub fn packet_mut<'a>(&'a mut self, umem: &'a Umem) -> &'a mut [u8] {
+    pub fn data_mut<'a>(&'a mut self, umem: &'a Umem) -> &'a mut [u8] {
         let headroom = umem.config().frame_headroom as usize;
         &mut self.as_slice_mut(umem)[headroom..]
     }
