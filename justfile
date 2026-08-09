@@ -62,6 +62,16 @@ build:
     cargo test --workspace
     cargo build --release
 
+# Run the forwarding smoke test, which needs root to create
+# namespaces and veth links and to bind AF_XDP. Built first as
+# the invoking user so the compiler cache is not left
+# root-owned.
+smoke:
+    cargo test -p mangonel --no-run
+    # Absolute path to cargo: sudo's secure_path drops the rustup
+    # PATH, and -E preserves HOME so the toolchain still resolves.
+    sudo -E "$(command -v cargo)" test -p mangonel -- --ignored --test-threads=1 --nocapture
+
 # Lint with clippy
 lint:
     cargo sort --workspace -g
