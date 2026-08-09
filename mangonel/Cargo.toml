@@ -6,6 +6,7 @@ license = { workspace = true }
 
 [dependencies]
 mangonel-libxdp = { workspace = true }
+mangonel-nic = { workspace = true }
 
 axum = { workspace = true }
 clap = { workspace = true }

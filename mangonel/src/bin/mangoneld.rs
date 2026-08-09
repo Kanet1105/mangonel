@@ -41,6 +41,7 @@ async fn main() {
     let router = Router::new()
         .route("/api/v1/status", get(status))
         .route("/api/v1/stats", get(stats))
+        .route("/api/v1/interfaces", get(interfaces))
         .route("/api/v1/interfaces/{interface}/attach", post(attach))
         .route("/api/v1/interfaces/{interface}/detach", post(detach))
         .route("/api/v1/interfaces/{interface}/clean", post(clean))
@@ -176,11 +177,44 @@ async fn stats(AxumState(app): AxumState<App>) -> Json<api::StatsResponse> {
         .into_iter()
         .map(|interface| api::InterfaceStats {
             interface: interface.interface,
+            zero_copy: interface.zero_copy,
             queues: interface.queues,
         })
         .collect();
 
     Json(api::StatsResponse { interfaces })
+}
+
+async fn interfaces(
+    AxumState(app): AxumState<App>,
+) -> Result<Json<api::InterfacesResponse>, ApiError> {
+    let state = app.state.clone();
+    // Opening each interface is a handful of sysfs reads and
+    // ioctls; off the reactor thread for uniformity.
+    let interfaces = spawn_state(move || state.interfaces())
+        .await?
+        .into_iter()
+        .map(|interface| api::Interface {
+            mac: format_mac(interface.mac),
+            name: interface.name,
+            index: interface.index,
+            mtu: interface.mtu,
+            up: interface.up,
+            running: interface.running,
+            xdp_queues: interface.xdp_queues,
+            numa_node: interface.numa_node,
+            driver: interface.driver,
+            attached: interface.attached,
+        })
+        .collect();
+
+    Ok(Json(api::InterfacesResponse { interfaces }))
+}
+
+fn format_mac(mac: [u8; 6]) -> String {
+    let [a, b, c, d, e, f] = mac;
+
+    format!("{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}")
 }
 
 async fn attach(
@@ -230,9 +264,10 @@ async fn shutdown(AxumState(app): AxumState<App>) -> StatusCode {
 /// Runs a blocking [`State`] call on the blocking pool,
 /// flattening a task panic and a [`StateError`] into an
 /// [`ApiError`].
-async fn spawn_state<F>(operation: F) -> Result<(), ApiError>
+async fn spawn_state<F, T>(operation: F) -> Result<T, ApiError>
 where
-    F: FnOnce() -> Result<(), StateError> + Send + 'static,
+    F: FnOnce() -> Result<T, StateError> + Send + 'static,
+    T: Send + 'static,
 {
     tokio::task::spawn_blocking(operation)
         .await
@@ -279,7 +314,9 @@ impl From<StateError> for ApiError {
                 StatusCode::CONFLICT
             }
             StateError::NotAttached(_) => StatusCode::NOT_FOUND,
-            StateError::NoCores | StateError::Xdp(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            StateError::NoCores | StateError::Nic(_) | StateError::Xdp(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
 
         Self(code, error.to_string())
