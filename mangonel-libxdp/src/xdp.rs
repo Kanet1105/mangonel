@@ -54,9 +54,7 @@ pub fn bind(
     // The umem mapping counts against RLIMIT_MEMLOCK.
     setrlimit();
 
-    let queue_count = Nic::open(interface_name)
-        .map_err(SocketError::Nic)?
-        .xdp_queues();
+    let queue_count = Nic::open(interface_name).map_err(Error::Nic)?.xdp_queues();
     // The kernel refuses zero-queue interfaces, and counting
     // errors rather than reporting zero.
     assert!(
@@ -85,7 +83,7 @@ pub fn bind(
     let frame_count = DEFAULT_RING_SIZE
         .checked_mul(RINGS_PER_SOCKET)
         .and_then(|frames| frames.checked_mul(queue_count))
-        .ok_or(SocketError::TooManyQueues { queue_count })?;
+        .ok_or(Error::TooManyQueues { queue_count })?;
 
     let umem = {
         let first = queue_rings[0]
@@ -102,7 +100,7 @@ pub fn bind(
         )?
     };
 
-    let interface = CString::new(interface_name).map_err(SocketError::InvalidInterfaceName)?;
+    let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config();
 
     let frames_per_queue = frame_count / queue_count;
@@ -134,7 +132,7 @@ pub fn bind(
         if value.is_negative() {
             // Bound sockets drop with `pairs`, before the umem;
             // unclaimed rings drop after it.
-            return Err(SocketError::Initialize {
+            return Err(Error::Initialize {
                 queue_id,
                 source: io::Error::from_raw_os_error(-value),
             }
@@ -218,16 +216,14 @@ pub fn bind_with_umem(
 ) -> Result<Vec<(XdpSender, XdpReceiver)>, XdpError> {
     let interface_name = interface_name.as_ref();
 
-    let queue_count = Nic::open(interface_name)
-        .map_err(SocketError::Nic)?
-        .xdp_queues();
+    let queue_count = Nic::open(interface_name).map_err(Error::Nic)?.xdp_queues();
     // As in bind.
     assert!(
         queue_count > 0,
         "The interface reports zero queues. This is a bug."
     );
 
-    let interface = CString::new(interface_name).map_err(SocketError::InvalidInterfaceName)?;
+    let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config();
 
     let mut pairs = Vec::with_capacity(queue_count as usize);
@@ -252,7 +248,7 @@ pub fn bind_with_umem(
             )
         };
         if value.is_negative() {
-            return Err(SocketError::Initialize {
+            return Err(Error::Initialize {
                 queue_id,
                 source: io::Error::from_raw_os_error(-value),
             }
@@ -364,16 +360,28 @@ fn warn_copy_mode(interface_name: &str, fd: i32) {
 #[error(transparent)]
 pub struct XdpError(Error);
 
-/// Private aggregate of every module's error, so none of
-/// them leak into the public API.
+/// Private aggregate of every failure, so none of the
+/// variants leak into the public API.
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error(transparent)]
     Ring(#[from] RingError),
     #[error(transparent)]
     Umem(#[from] UmemError),
-    #[error(transparent)]
-    Socket(#[from] SocketError),
+    #[error("Interface name contains null character(s): {0}")]
+    InvalidInterfaceName(NulError),
+    #[error("Failed to query the interface: {0}")]
+    Nic(mangonel_nic::nic::Error),
+    #[error("The interface's queue count '{queue_count}' overflows the umem frame count.")]
+    TooManyQueues { queue_count: u32 },
+    #[error("Failed to initialize the socket for queue {queue_id}: {source}")]
+    Initialize { queue_id: u32, source: io::Error },
+}
+
+impl From<Error> for XdpError {
+    fn from(error: Error) -> Self {
+        Self(error)
+    }
 }
 
 impl From<RingError> for XdpError {
@@ -386,24 +394,6 @@ impl From<UmemError> for XdpError {
     fn from(error: UmemError) -> Self {
         Self(error.into())
     }
-}
-
-impl From<SocketError> for XdpError {
-    fn from(error: SocketError) -> Self {
-        Self(error.into())
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum SocketError {
-    #[error("Interface name contains null character(s): {0}")]
-    InvalidInterfaceName(NulError),
-    #[error("Failed to query the interface: {0}")]
-    Nic(mangonel_nic::nic::Error),
-    #[error("The interface's queue count '{queue_count}' overflows the umem frame count.")]
-    TooManyQueues { queue_count: u32 },
-    #[error("Failed to initialize the socket for queue {queue_id}: {source}")]
-    Initialize { queue_id: u32, source: io::Error },
 }
 
 // Guards the unsafe Send/Sync impls the tx/rx split rests
