@@ -580,6 +580,16 @@ pub enum Error {
     NoDefaultRoute(&'static str),
 }
 
+impl Error {
+    /// Whether this is the driver reporting an ioctl it
+    /// does not implement (`EOPNOTSUPP`) — common on
+    /// virtual interfaces, e.g. veth and loopback
+    /// answering the channels ioctls this way.
+    pub fn is_unsupported(&self) -> bool {
+        matches!(self, Error::Ioctl(_, _, source) if source.raw_os_error() == Some(libc::EOPNOTSUPP))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

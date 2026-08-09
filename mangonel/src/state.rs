@@ -53,9 +53,20 @@ impl State {
 
         // Queue count is a link-cycling ioctl, and a socket
         // refuses to bind while it shrinks a queue, so set it
-        // before binding.
-        Nic::open(wan)?.set_queue_count(workers)?;
-        Nic::open(lan)?.set_queue_count(workers)?;
+        // before binding. A driver that cannot set channels
+        // (veth, loopback, many virtuals) keeps its own queue
+        // count — the `workers` request is best-effort there.
+        for interface in [wan, lan] {
+            match Nic::open(interface)?.set_queue_count(workers) {
+                Ok(()) => {}
+                Err(error) if error.is_unsupported() => {
+                    eprintln!(
+                        "mangonel: {interface}: driver cannot set queues; using its own count"
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
 
         // Two interfaces share the umem, so a frame received on
         // one and transmitted on the other never leaves it.
