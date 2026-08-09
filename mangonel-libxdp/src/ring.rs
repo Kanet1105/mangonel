@@ -42,7 +42,6 @@ impl Drop for Producer {
 }
 
 impl Producer {
-    #[inline]
     pub fn as_ptr(&self) -> *mut xsk_ring_prod {
         self.head.as_ptr()
     }
@@ -61,7 +60,6 @@ impl Producer {
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
-    #[inline]
     pub fn reserve(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
@@ -73,7 +71,6 @@ impl Producer {
     /// value, not `&mut` into the ring: two calls with
     /// aliasing indices would otherwise yield aliasing
     /// `&mut`.
-    #[inline]
     pub fn set_descriptor(&self, index: u32, address: u64, length: u32) {
         // SAFETY: The ring is registered; the index is masked into
         // range, and the slot is owned by this producer
@@ -91,13 +88,11 @@ impl Producer {
 
     /// Writes a fill-ring address into the slot at `index`.
     /// Same contract as [`Self::set_descriptor`].
-    #[inline]
     pub fn set_fill_address(&self, index: u32, address: u64) {
         // SAFETY: As above, for the fill ring.
         unsafe { *xsk_ring_prod__fill_addr(self.as_ptr(), index) = address }
     }
 
-    #[inline]
     pub fn submit(&self, offset: u32) {
         unsafe { xsk_ring_prod__submit(self.as_ptr(), offset) };
     }
@@ -117,7 +112,6 @@ impl Drop for Consumer {
 }
 
 impl Consumer {
-    #[inline]
     pub fn as_ptr(&self) -> *mut xsk_ring_cons {
         self.tail.as_ptr()
     }
@@ -132,7 +126,6 @@ impl Consumer {
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
-    #[inline]
     pub fn peek(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
@@ -142,7 +135,6 @@ impl Consumer {
 
     /// Copies the slot out: the kernel may rewrite it as
     /// soon as `release` hands it back.
-    #[inline]
     pub fn descriptor(&self, index: u32) -> xdp_desc {
         // SAFETY: The ring is registered and the index is masked
         // into range; an index beyond what peek reported
@@ -151,13 +143,11 @@ impl Consumer {
     }
 
     /// Copies the address out; as [`Self::descriptor`].
-    #[inline]
     pub fn completion_address(&self, index: u32) -> u64 {
         // SAFETY: As above, for the completion ring.
         unsafe { xsk_ring_cons__comp_addr(self.as_ptr(), index).read() }
     }
 
-    #[inline]
     pub fn release(&self, offset: u32) {
         unsafe { xsk_ring_cons__release(self.as_ptr(), offset) };
     }

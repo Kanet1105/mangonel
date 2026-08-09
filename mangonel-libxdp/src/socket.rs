@@ -37,7 +37,6 @@ impl XdpSender {
     /// Panics when a descriptor in the batch is empty or
     /// from a different umem. Validated before the ring is
     /// touched, so the ring is never left half-reserved.
-    #[inline]
     #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
     pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
@@ -91,7 +90,6 @@ impl XdpSender {
     }
 
     /// Wakes the driver; non-blocking and carries no data.
-    #[inline]
     fn kick(&mut self) {
         unsafe {
             sendto(
@@ -105,7 +103,6 @@ impl XdpSender {
         };
     }
 
-    #[inline]
     fn complete(&mut self) {
         let size = u32::try_from(self.desc_producer.slots())
             .expect("XdpDescriptor producer slots overflow u32. This is a bug.");
@@ -142,7 +139,6 @@ impl XdpReceiver {
     /// descriptor per received frame, overwriting the
     /// slots; returns the count. Overwriting a slot still
     /// holding a minted descriptor leaks its frame.
-    #[inline]
     #[must_use = "the count says how many descriptors were filled with received frames"]
     pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
@@ -172,7 +168,6 @@ impl XdpReceiver {
         offset
     }
 
-    #[inline]
     fn fill(&mut self) {
         let size = u32::try_from(self.desc_consumer.slots())
             .expect("XdpDescriptor consumer slots overflow u32. This is a bug.")
@@ -193,7 +188,6 @@ impl XdpReceiver {
         fill_ring.submit(offset);
     }
 
-    #[inline]
     fn poll(&mut self) {
         let mut poll_fd_struct = pollfd {
             fd: self.socket.socket_fd(),
@@ -209,7 +203,6 @@ pub struct Socket {
 }
 
 impl Clone for Socket {
-    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -239,12 +232,10 @@ impl Socket {
         }
     }
 
-    #[inline]
     pub(crate) fn socket_fd(&self) -> i32 {
         unsafe { xsk_socket__fd(self.inner.socket.as_ptr()) }
     }
 
-    #[inline]
     fn umem(&self) -> &Umem {
         &self.inner.umem
     }
@@ -252,25 +243,21 @@ impl Socket {
     /// For the exclusive use of `XdpSender`; bind hands it
     /// to exactly one half. See the `Sync` impl on
     /// [`SocketInner`].
-    #[inline]
     fn tx_ring(&self) -> &Producer {
         &self.inner.tx_ring
     }
 
     /// For `XdpReceiver` only; as [`Self::tx_ring`].
-    #[inline]
     fn rx_ring(&self) -> &Consumer {
         &self.inner.rx_ring
     }
 
     /// For `XdpReceiver` only; as [`Self::tx_ring`].
-    #[inline]
     fn fill_ring(&self) -> &Producer {
         &self.inner.fill_ring
     }
 
     /// For `XdpSender` only; as [`Self::tx_ring`].
-    #[inline]
     fn completion_ring(&self) -> &Consumer {
         &self.inner.completion_ring
     }

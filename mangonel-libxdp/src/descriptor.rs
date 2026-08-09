@@ -27,7 +27,6 @@ pub struct XdpDescriptor {
 impl XdpDescriptor {
     /// Packet length in bytes. The slices are longer: they
     /// include the frame headroom ahead of the packet.
-    #[inline]
     pub fn length(&self) -> u32 {
         self.length
     }
@@ -35,7 +34,6 @@ impl XdpDescriptor {
     /// Panics unless this descriptor was minted against
     /// `umem` and still owns its frame. Zero never
     /// matches: umem ids start at 1.
-    #[inline]
     fn check_minted_for(&self, umem: &Umem) {
         assert!(
             self.umem_id == umem.id(),
@@ -53,7 +51,6 @@ impl XdpDescriptor {
     ///
     /// Panics if the descriptor is empty or from a
     /// different umem.
-    #[inline]
     pub fn as_slice<'a>(&'a self, umem: &'a Umem) -> &'a [u8] {
         self.check_minted_for(umem);
         let headroom_size = umem.config().frame_headroom;
@@ -81,7 +78,6 @@ impl XdpDescriptor {
     /// # Panics
     ///
     /// As [`Self::as_slice`].
-    #[inline]
     pub fn as_slice_mut<'a>(&'a mut self, umem: &'a Umem) -> &'a mut [u8] {
         self.check_minted_for(umem);
         let headroom_size = umem.config().frame_headroom;
@@ -106,7 +102,6 @@ impl XdpDescriptor {
     /// # Panics
     ///
     /// As [`Self::as_slice`].
-    #[inline]
     pub fn packet<'a>(&'a self, umem: &'a Umem) -> &'a [u8] {
         let headroom = umem.config().frame_headroom as usize;
         &self.as_slice(umem)[headroom..]
@@ -117,7 +112,6 @@ impl XdpDescriptor {
     /// # Panics
     ///
     /// As [`Self::as_slice`].
-    #[inline]
     pub fn packet_mut<'a>(&'a mut self, umem: &'a Umem) -> &'a mut [u8] {
         let headroom = umem.config().frame_headroom as usize;
         &mut self.as_slice_mut(umem)[headroom..]

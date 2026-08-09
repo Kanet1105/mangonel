@@ -57,7 +57,6 @@ unsafe impl Send for Umem {}
 unsafe impl Sync for Umem {}
 
 impl Clone for Umem {
-    #[inline]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -149,28 +148,23 @@ impl Umem {
 
     /// Process-unique id carried by every `XdpDescriptor`
     /// minted against this umem.
-    #[inline]
     pub(crate) fn id(&self) -> usize {
         self.inner.id
     }
 
     /// Number of frames the region holds.
-    #[inline]
     pub fn frame_count(&self) -> u32 {
         self.inner.frame_count
     }
 
-    #[inline]
     pub(crate) fn as_ptr(&self) -> *mut xsk_umem {
         self.inner.umem.as_ptr()
     }
 
-    #[inline]
     pub(crate) fn config(&self) -> &xsk_umem_config {
         &self.inner.config
     }
 
-    #[inline]
     pub(crate) fn get_data(&self, address: u64, length: usize) -> Option<*mut c_void> {
         let start = usize::try_from(address).ok()?;
         if start.checked_add(length)? > self.inner.area.length {

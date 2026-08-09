@@ -20,6 +20,12 @@ libc = "0.2"
 rtrb = "0.3"
 thiserror = "2.0"
 
+# The hot path spans three crates, so cross-crate inlining
+# comes from LTO rather than per-function #[inline] hints.
+[profile.release]
+lto = true
+codegen-units = 1
+
 # Numeric conversions in these crates cross kernel ABI widths (u32 ring
 # indices, u64 umem addresses, usize lengths), so every lossy or
 # platform-dependent cast should be deliberate rather than incidental.
