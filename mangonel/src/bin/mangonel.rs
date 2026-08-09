@@ -37,13 +37,6 @@ enum Command {
     /// Bring the router up from the daemon's config file
     /// (also reloads).
     Run,
-    /// Attach an interface to the data plane.
-    Attach { interface: String },
-    /// Detach an interface.
-    Detach { interface: String },
-    /// Remove a leftover XDP program from an unattached
-    /// interface (crash recovery).
-    Clean { interface: String },
     /// Stop the daemon.
     Shutdown,
 }
@@ -111,27 +104,6 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                     interface.name, interface.xdp_queues, interface.mtu, interface.mac
                 );
             }
-        }
-        Command::Attach { interface } => {
-            post(
-                &cli.socket,
-                &format!("/api/v1/interfaces/{interface}/attach"),
-            )?;
-            println!("attached {interface}");
-        }
-        Command::Detach { interface } => {
-            post(
-                &cli.socket,
-                &format!("/api/v1/interfaces/{interface}/detach"),
-            )?;
-            println!("detached {interface}");
-        }
-        Command::Clean { interface } => {
-            post(
-                &cli.socket,
-                &format!("/api/v1/interfaces/{interface}/clean"),
-            )?;
-            println!("cleaned {interface}");
         }
         Command::Run => {
             post(&cli.socket, "/api/v1/run")?;

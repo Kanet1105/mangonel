@@ -7,7 +7,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use mangonel_libxdp::{Binding, Umem, XdpError, bind, clear_interface};
+use mangonel_libxdp::{Binding, Umem, XdpError, bind};
 use mangonel_nic::nic::{self, Nic};
 
 use crate::{config::Config, worker};
@@ -33,7 +33,7 @@ impl State {
     /// Binds the interface and spawns one pinned worker per
     /// queue. The interface stops passing traffic to the
     /// kernel from here until detach.
-    pub fn attach(&self, interface: &str) -> Result<(), StateError> {
+    fn attach(&self, interface: &str) -> Result<(), StateError> {
         // The lock spans bind so a concurrent attach of the same
         // interface is a clean error, not a race; attach is
         // cold path.
@@ -89,7 +89,7 @@ impl State {
 
     /// Stops the interface's workers, joins them, and
     /// releases the interface back to the kernel.
-    pub fn detach(&self, interface: &str) -> Result<(), StateError> {
+    fn detach(&self, interface: &str) -> Result<(), StateError> {
         let attachment = self
             .lock()
             .remove(interface)
@@ -128,21 +128,6 @@ impl State {
         for interface in interfaces {
             self.attach(interface)?;
         }
-
-        Ok(())
-    }
-
-    /// Removes a leftover XDP program from an interface
-    /// this daemon does not have attached — recovery
-    /// after a crash left one dangling. Refuses an
-    /// attached interface: detach it first, or this
-    /// would tear the program out from under its
-    /// running workers.
-    pub fn clean(&self, interface: &str) -> Result<(), StateError> {
-        if self.lock().contains_key(interface) {
-            return Err(StateError::AttachedCannotClean(interface.to_owned()));
-        }
-        clear_interface(interface)?;
 
         Ok(())
     }
@@ -281,8 +266,6 @@ pub enum StateError {
     AlreadyAttached(String),
     #[error("The interface '{0}' is not attached.")]
     NotAttached(String),
-    #[error("The interface '{0}' is attached; detach it before cleaning.")]
-    AttachedCannotClean(String),
     #[error("No cores are available for pinning.")]
     NoCores,
     #[error("Failed to query interfaces: {0}")]
