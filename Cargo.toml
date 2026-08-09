@@ -16,6 +16,7 @@ mangonel-libxdp = { path = "mangonel-libxdp" }
 mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
 mangonel-nic = { path = "mangonel-nic" }
 
+core_affinity = "0.8"
 libc = "0.2"
 rtrb = "0.3"
 thiserror = "2.0"
