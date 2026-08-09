@@ -407,7 +407,9 @@ struct ApiError(StatusCode, String);
 impl From<StateError> for ApiError {
     fn from(error: StateError) -> Self {
         let code = match &error {
-            StateError::QueueMismatch { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            StateError::QueueMismatch { .. } | StateError::Fib(_) => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             StateError::NoCores | StateError::Nic(_) | StateError::Xdp(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

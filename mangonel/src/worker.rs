@@ -1,7 +1,12 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use core_affinity::CoreId;
-use mangonel_libxdp::{FramePool, XdpDescriptor, XdpSocket};
+use mangonel_libxdp::{FramePool, Umem, XdpDescriptor, XdpSocket};
+
+use crate::net::{Neighbors, Router, Side};
 
 /// Descriptors processed per receive call.
 const BATCH_SIZE: usize = 64;
@@ -29,28 +34,53 @@ pub(crate) fn assign_core(cores: &[CoreId], index: usize) -> CoreId {
 }
 
 /// Forwards between one WAN queue and one LAN queue, both
-/// directions, over a shared frame pool. `wan` and `lan`
-/// bind the same umem, so a frame received on one is
-/// transmitted on the other with no copy, and its
-/// completion returns to `pool` — the pool cannot starve
-/// under asymmetric traffic because both interfaces draw
-/// from and return to it.
+/// directions, over a shared frame pool.
 ///
-/// Forwarding is L2: the frame goes out unchanged. L3
-/// routing — parse, FIB lookup, TTL, MAC rewrite — is the
-/// per-packet step that will sit between receive and send.
+/// With `router` set, each frame is routed at L3 — parsed,
+/// TTL-decremented, MAC-rewritten — and dropped if it does
+/// not resolve; without it, frames cross unchanged (L2).
+/// The neighbor table is per-worker, learned from this
+/// queue's traffic.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one pinned worker's whole context; a struct would only move the arguments"
+)]
 pub(crate) fn forward(
     mut wan: XdpSocket,
     mut lan: XdpSocket,
     mut pool: FramePool,
+    umem: Umem,
+    router: Option<Arc<Router>>,
     running: &AtomicBool,
     wan_counter: &AtomicU64,
     lan_counter: &AtomicU64,
 ) {
+    let router = router.as_deref();
+    let mut neighbors = Neighbors::default();
     let mut batch: [XdpDescriptor; BATCH_SIZE] = std::array::from_fn(|_| XdpDescriptor::default());
     while running.load(Ordering::Relaxed) {
-        let to_lan = pump(&mut wan, &mut lan, &mut pool, &mut batch);
-        let to_wan = pump(&mut lan, &mut wan, &mut pool, &mut batch);
+        let to_lan = pump(
+            &mut wan,
+            &mut lan,
+            Side::Wan,
+            Side::Lan,
+            &mut pool,
+            &umem,
+            router,
+            &mut neighbors,
+            &mut batch,
+        );
+        let to_wan = pump(
+            &mut lan,
+            &mut wan,
+            Side::Lan,
+            Side::Wan,
+            &mut pool,
+            &umem,
+            router,
+            &mut neighbors,
+            &mut batch,
+        );
 
         wan_counter.fetch_add(u64::from(to_lan), Ordering::Relaxed);
         lan_counter.fetch_add(u64::from(to_wan), Ordering::Relaxed);
@@ -60,15 +90,25 @@ pub(crate) fn forward(
     }
 }
 
-/// Receives a batch on `from` and transmits it out `to`,
-/// returning how many were forwarded. The batch is fully
+/// Receives a batch on `from`, routes (or passes) each
+/// frame, and transmits out `to`. Returns how many were
+/// forwarded (the rest dropped). The batch is fully
 /// consumed before returning: the next receive would
 /// otherwise overwrite minted descriptors and leak their
 /// frames.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "single-threaded hot path; grouping into a struct would only move the arguments"
+)]
 fn pump(
     from: &mut XdpSocket,
     to: &mut XdpSocket,
+    ingress: Side,
+    egress: Side,
     pool: &mut FramePool,
+    umem: &Umem,
+    router: Option<&Router>,
+    neighbors: &mut Neighbors,
     batch: &mut [XdpDescriptor],
 ) -> u32 {
     let received = from.receive(batch, pool);
@@ -76,7 +116,23 @@ fn pump(
         return 0;
     }
 
-    // L3 processing goes here.
+    let mut forwarded = received;
+    if let Some(router) = router {
+        forwarded = 0;
+        for descriptor in &mut batch[..received as usize] {
+            // Scope the frame borrow so set_drop can take the
+            // descriptor back afterwards.
+            let keep = {
+                let frame = descriptor.data_mut(umem);
+                router.forward(frame, ingress, egress, neighbors)
+            };
+            if keep {
+                forwarded += 1;
+            } else {
+                descriptor.set_drop();
+            }
+        }
+    }
 
     // send consumes a partial front when the tx ring is full;
     // retry the tail. A send that makes no progress means the
@@ -95,10 +151,9 @@ fn pump(
             for descriptor in tail.iter_mut() {
                 descriptor.set_drop();
             }
-            // Drops need no tx slot, so this consumes the rest.
             consumed += to.send(tail, pool);
         }
     }
 
-    received
+    forwarded
 }
