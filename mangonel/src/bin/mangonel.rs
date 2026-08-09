@@ -32,6 +32,8 @@ enum Command {
     Status,
     /// Show per-queue packet counters.
     Stats,
+    /// List the host's interfaces and their properties.
+    Interfaces,
     /// Attach an interface to the data plane.
     Attach { interface: String },
     /// Detach an interface.
@@ -79,10 +81,32 @@ fn run(cli: &Cli) -> Result<(), CliError> {
             }
             for interface in &stats.interfaces {
                 let total: u64 = interface.queues.iter().sum();
-                println!("{} — {total} packets", interface.interface);
+                let mode = if interface.zero_copy {
+                    "zero-copy"
+                } else {
+                    "copy"
+                };
+                println!("{} ({mode}) — {total} packets", interface.interface);
                 for (queue, count) in interface.queues.iter().enumerate() {
                     println!("  queue {queue}: {count}");
                 }
+            }
+        }
+        Command::Interfaces => {
+            let response: api::InterfacesResponse = get(&cli.socket, "/api/v1/interfaces")?;
+            for interface in &response.interfaces {
+                let state = if interface.attached {
+                    "attached"
+                } else if interface.up {
+                    "up"
+                } else {
+                    "down"
+                };
+                let driver = interface.driver.as_deref().unwrap_or("?");
+                println!(
+                    "{} [{state}] {driver} — {} xdp queues, mtu {}, mac {}",
+                    interface.name, interface.xdp_queues, interface.mtu, interface.mac
+                );
             }
         }
         Command::Attach { interface } => {

@@ -429,6 +429,7 @@ dependencies = [
  "core_affinity",
  "libc",
  "mangonel-libxdp",
+ "mangonel-nic",
  "serde",
  "serde_json",
  "thiserror",

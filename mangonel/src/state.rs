@@ -7,7 +7,8 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use mangonel_libxdp::{Umem, XdpError, bind, clear_interface};
+use mangonel_libxdp::{Binding, Umem, XdpError, bind, clear_interface};
+use mangonel_nic::nic::{self, Nic};
 
 use crate::worker;
 
@@ -42,7 +43,11 @@ impl State {
         }
 
         let cores = worker::allowed_cores().ok_or(StateError::NoCores)?;
-        let (pairs, umem) = bind(interface)?;
+        let Binding {
+            pairs,
+            umem,
+            zero_copy,
+        } = bind(interface)?;
 
         let running = Arc::new(AtomicBool::new(true));
         let mut counters = Vec::with_capacity(pairs.len());
@@ -73,6 +78,7 @@ impl State {
             Attachment {
                 running,
                 counters,
+                zero_copy,
                 workers,
                 _umem: umem,
             },
@@ -111,6 +117,32 @@ impl State {
         Ok(())
     }
 
+    /// Every interface the host has, with the properties
+    /// that decide whether — and how well — it can be
+    /// attached, and whether this daemon has it attached.
+    pub fn interfaces(&self) -> Result<Vec<InterfaceInfo>, StateError> {
+        let attached = self.lock();
+        let mut interfaces = Vec::new();
+        for name in Nic::list()? {
+            let nic = Nic::open(&name)?;
+            interfaces.push(InterfaceInfo {
+                attached: attached.contains_key(&name),
+                index: nic.index(),
+                mac: nic.mac(),
+                mtu: nic.mtu(),
+                up: nic.is_up(),
+                running: nic.is_running(),
+                xdp_queues: nic.xdp_queues(),
+                numa_node: nic.numa_node(),
+                driver: nic.driver().map(|driver| driver.name.clone()),
+                name,
+            });
+        }
+        interfaces.sort_by(|a, b| a.name.cmp(&b.name));
+
+        Ok(interfaces)
+    }
+
     /// Detaches every interface; for shutdown.
     pub fn detach_all(&self) {
         // Emptied under the lock; the drained attachments drop
@@ -127,6 +159,7 @@ impl State {
             .iter()
             .map(|(interface, attachment)| InterfaceStatus {
                 interface: interface.clone(),
+                zero_copy: attachment.zero_copy,
                 queues: attachment
                     .counters
                     .iter()
@@ -162,6 +195,8 @@ struct Attachment {
     running: Arc<AtomicBool>,
     /// Packets received, one counter per queue.
     counters: Vec<Arc<AtomicU64>>,
+    /// Whether the kernel bound this interface zero-copy.
+    zero_copy: bool,
     workers: Vec<JoinHandle<()>>,
     /// Held so it outlives every worker's socket halves;
     /// its drop, last, unloads the XDP program.
@@ -186,8 +221,28 @@ impl Drop for Attachment {
 /// Per-interface counter snapshot.
 pub struct InterfaceStatus {
     pub interface: String,
+    /// Whether the kernel bound this interface zero-copy.
+    pub zero_copy: bool,
     /// Packets received, cumulative, one entry per queue.
     pub queues: Vec<u64>,
+}
+
+/// A host interface and what it can do, for the picker.
+pub struct InterfaceInfo {
+    pub name: String,
+    pub index: u32,
+    pub mac: [u8; 6],
+    pub mtu: u32,
+    pub up: bool,
+    pub running: bool,
+    /// Queue ids a socket with both rings can bind to.
+    pub xdp_queues: u32,
+    pub numa_node: Option<i32>,
+    /// Driver module, e.g. `ice`, `veth`; `None` when the
+    /// driver reports none.
+    pub driver: Option<String>,
+    /// Whether this daemon currently has it attached.
+    pub attached: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -200,6 +255,8 @@ pub enum StateError {
     AttachedCannotClean(String),
     #[error("No cores are available for pinning.")]
     NoCores,
+    #[error("Failed to query interfaces: {0}")]
+    Nic(#[from] nic::Error),
     #[error(transparent)]
     Xdp(#[from] XdpError),
 }

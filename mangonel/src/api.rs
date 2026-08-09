@@ -26,7 +26,31 @@ pub struct StatsResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InterfaceStats {
     pub interface: String,
+    pub zero_copy: bool,
     pub queues: Vec<u64>,
+}
+
+/// `GET /api/v1/interfaces`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InterfacesResponse {
+    pub interfaces: Vec<Interface>,
+}
+
+/// A host interface and what decides whether it can be
+/// attached.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Interface {
+    pub name: String,
+    pub index: u32,
+    /// `aa:bb:cc:dd:ee:ff`.
+    pub mac: String,
+    pub mtu: u32,
+    pub up: bool,
+    pub running: bool,
+    pub xdp_queues: u32,
+    pub numa_node: Option<i32>,
+    pub driver: Option<String>,
+    pub attached: bool,
 }
 
 /// The body of any non-2xx response.

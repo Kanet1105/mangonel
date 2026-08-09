@@ -23,6 +23,15 @@ use crate::{
 /// completion.
 const RINGS_PER_SOCKET: u32 = 4;
 
+/// What [`bind`] returns: the per-queue socket halves, the
+/// umem backing them, and whether the kernel bound
+/// zero-copy.
+pub struct Binding {
+    pub pairs: Vec<(XdpSender, XdpReceiver)>,
+    pub umem: Umem,
+    pub zero_copy: bool,
+}
+
 /// One queue's rings, allocated before its socket binds.
 /// A slot is taken only after a successful bind: an
 /// unclaimed fill/completion pair must outlive the umem,
@@ -41,15 +50,14 @@ struct QueueRings {
 /// Descriptors may cross pairs: any receiver's descriptor
 /// may go to any sender. The umem must outlive every pair.
 /// Attach mode and copy mode are the kernel's preference;
-/// see [`bind_with_umem`] to add another interface.
+/// see [`bind_with_umem`] to add another interface. The
+/// returned bool is whether the kernel bound zero-copy.
 ///
 /// # Panics
 ///
 /// Panics on broken libxdp/kernel contracts: unpopulated
 /// rings, a null socket, an interface with zero queues.
-pub fn bind(
-    interface_name: impl AsRef<str>,
-) -> Result<(Vec<(XdpSender, XdpReceiver)>, Umem), XdpError> {
+pub fn bind(interface_name: impl AsRef<str>) -> Result<Binding, XdpError> {
     let interface_name = interface_name.as_ref();
 
     // The umem mapping counts against RLIMIT_MEMLOCK.
@@ -106,6 +114,9 @@ pub fn bind(
 
     let frames_per_queue = frame_count / queue_count;
     let mut pairs = Vec::with_capacity(queue_count as usize);
+    // Set from queue 0; every queue on an interface binds in
+    // the same mode.
+    let mut zero_copy = false;
     for queue_id in 0..queue_count {
         let slot = &mut queue_rings[queue_id as usize];
         let rings = slot
@@ -171,7 +182,7 @@ pub fn bind(
 
         // Once per interface: every queue lands in the same mode.
         if queue_id == 0 {
-            warn_copy_mode(interface_name, socket.socket_fd());
+            zero_copy = warn_copy_mode(interface_name, socket.socket_fd());
         }
 
         // Seeded with this queue's slice, sized for the whole
@@ -195,7 +206,11 @@ pub fn bind(
         ));
     }
 
-    Ok((pairs, umem))
+    Ok(Binding {
+        pairs,
+        umem,
+        zero_copy,
+    })
 }
 
 /// Opens one socket per usable queue on the interface,
@@ -400,14 +415,17 @@ fn is_zero_copy(fd: i32) -> bool {
 
 /// Warns on stderr when the interface fell back to copy
 /// mode — silent, and an order of magnitude slower, if left
-/// undetected.
-fn warn_copy_mode(interface_name: &str, fd: i32) {
-    if !is_zero_copy(fd) {
+/// undetected — and returns whether it bound zero-copy.
+fn warn_copy_mode(interface_name: &str, fd: i32) -> bool {
+    let zero_copy = is_zero_copy(fd);
+    if !zero_copy {
         eprintln!(
             "mangonel-libxdp: {interface_name}: driver lacks zero-copy support; running in copy \
              mode."
         );
     }
+
+    zero_copy
 }
 
 /// The error type for this crate: any failure reported
