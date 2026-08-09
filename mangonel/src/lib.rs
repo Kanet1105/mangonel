@@ -3,7 +3,9 @@
 //! [`state::State`] owns interface attachments; each
 //! attachment pins one worker per queue. The workers
 //! currently receive, count, and drop — the substrate the
-//! forwarding path will grow on.
+//! forwarding path will grow on. [`api`] is the control
+//! contract the daemon serves.
 
+pub mod api;
 pub mod state;
 mod worker;

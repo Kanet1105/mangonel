@@ -16,10 +16,14 @@ mangonel-libxdp = { path = "mangonel-libxdp" }
 mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
 mangonel-nic = { path = "mangonel-nic" }
 
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 core_affinity = "0.8"
 libc = "0.2"
 rtrb = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 thiserror = "2.0"
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "signal"] }
 
 # Numeric conversions in these crates cross kernel ABI widths (u32 ring
 # indices, u64 umem addresses, usize lengths), so every lossy or

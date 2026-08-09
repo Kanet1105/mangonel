@@ -1,0 +1,199 @@
+//! The mangonel control daemon: an HTTP+JSON API over a
+//! Unix socket, dispatching to [`State`].
+
+use std::{os::unix::fs::PermissionsExt, sync::Arc, time::Instant};
+
+use axum::{
+    Json, Router,
+    extract::{Path, State as AxumState},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use mangonel::{
+    api,
+    state::{State, StateError},
+};
+use tokio::{net::UnixListener, signal, sync::Notify};
+
+/// Everything the handlers share. Cheap to clone — the
+/// state and the shutdown notifier are behind `Arc`.
+#[derive(Clone)]
+struct App {
+    state: Arc<State>,
+    shutdown: Arc<Notify>,
+    start: Instant,
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let socket_path = socket_path();
+    let app = App {
+        state: Arc::new(State::new()),
+        shutdown: Arc::new(Notify::new()),
+        start: Instant::now(),
+    };
+
+    let router = Router::new()
+        .route("/api/v1/status", get(status))
+        .route("/api/v1/stats", get(stats))
+        .route("/api/v1/interfaces/{interface}/attach", post(attach))
+        .route("/api/v1/interfaces/{interface}/detach", post(detach))
+        .route("/api/v1/shutdown", post(shutdown))
+        .with_state(app.clone());
+
+    // A stale socket from a crashed daemon would block the
+    // bind.
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListener::bind(&socket_path)
+        .unwrap_or_else(|error| panic!("Failed to bind {socket_path}: {error}"));
+    // Root-only: filesystem permissions are the authorization.
+    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+        .expect("Failed to restrict the control socket.");
+    eprintln!("mangoneld: listening on {socket_path}");
+
+    axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal(app.shutdown.clone()))
+        .await
+        .expect("The control server failed.");
+
+    eprintln!("mangoneld: detaching and exiting");
+    app.state.detach_all();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Reads `--socket <path>`, else the well-known default.
+fn socket_path() -> String {
+    let mut arguments = std::env::args().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--socket" {
+            return arguments.next().expect("--socket needs a path argument");
+        }
+    }
+
+    api::DEFAULT_SOCKET_PATH.to_owned()
+}
+
+async fn status(AxumState(app): AxumState<App>) -> Json<api::StatusResponse> {
+    let interfaces = app
+        .state
+        .status()
+        .into_iter()
+        .map(|interface| interface.interface)
+        .collect();
+
+    Json(api::StatusResponse {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        uptime_seconds: app.start.elapsed().as_secs(),
+        interfaces,
+    })
+}
+
+async fn stats(AxumState(app): AxumState<App>) -> Json<api::StatsResponse> {
+    let interfaces = app
+        .state
+        .status()
+        .into_iter()
+        .map(|interface| api::InterfaceStats {
+            interface: interface.interface,
+            queues: interface.queues,
+        })
+        .collect();
+
+    Json(api::StatsResponse { interfaces })
+}
+
+async fn attach(
+    AxumState(app): AxumState<App>,
+    Path(interface): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let state = app.state.clone();
+    // bind() maps memory and loads an XDP program — seconds of
+    // blocking work — so it runs off the reactor thread.
+    spawn_state(move || state.attach(&interface)).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn detach(
+    AxumState(app): AxumState<App>,
+    Path(interface): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let state = app.state.clone();
+    // Joins the interface's workers; off the reactor thread as
+    // above.
+    spawn_state(move || state.detach(&interface)).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn shutdown(AxumState(app): AxumState<App>) -> StatusCode {
+    // Wakes the graceful-shutdown future; teardown runs in
+    // main.
+    app.shutdown.notify_one();
+
+    StatusCode::NO_CONTENT
+}
+
+/// Runs a blocking [`State`] call on the blocking pool,
+/// flattening a task panic and a [`StateError`] into an
+/// [`ApiError`].
+async fn spawn_state<F>(operation: F) -> Result<(), ApiError>
+where
+    F: FnOnce() -> Result<(), StateError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|_| {
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the operation panicked".to_owned(),
+            )
+        })?
+        .map_err(ApiError::from)
+}
+
+/// Resolves on SIGINT, SIGTERM, or an API shutdown request,
+/// whichever comes first.
+async fn shutdown_signal(request: Arc<Notify>) {
+    let interrupt = async {
+        signal::ctrl_c().await.ok();
+    };
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to install the SIGTERM handler.")
+            .recv()
+            .await;
+    };
+    let requested = async {
+        request.notified().await;
+    };
+
+    tokio::select! {
+        () = interrupt => {},
+        () = terminate => {},
+        () = requested => {},
+    }
+}
+
+/// A status code and message, rendered as an
+/// [`api::ErrorResponse`] body.
+struct ApiError(StatusCode, String);
+
+impl From<StateError> for ApiError {
+    fn from(error: StateError) -> Self {
+        let code = match &error {
+            StateError::AlreadyAttached(_) => StatusCode::CONFLICT,
+            StateError::NotAttached(_) => StatusCode::NOT_FOUND,
+            StateError::NoCores | StateError::Xdp(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        Self(code, error.to_string())
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.0, Json(api::ErrorResponse { error: self.1 })).into_response()
+    }
+}

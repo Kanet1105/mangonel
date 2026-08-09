@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
@@ -124,9 +124,13 @@ impl State {
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Attachment>> {
+        // Recover a poisoned lock rather than propagating the
+        // panic: a failed attach unwinds before it inserts, so
+        // the map stays consistent, and one bad operation must
+        // not brick the daemon's control plane.
         self.attachments
             .lock()
-            .expect("State mutex poisoned. This is a bug.")
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
