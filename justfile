@@ -62,13 +62,6 @@ build:
     cargo test --workspace
     cargo build --release
 
-# Run the veth smoke tests, which need root to create links
-# and bind AF_XDP. Built first as the invoking user so the
-# compiler cache is not left root-owned.
-smoke:
-    cargo test -p mangonel --no-run
-    sudo -E cargo test -p mangonel -- --ignored --test-threads=1 --nocapture
-
 # Lint with clippy
 lint:
     cargo sort --workspace -g
