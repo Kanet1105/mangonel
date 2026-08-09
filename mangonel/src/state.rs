@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -7,14 +6,14 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use mangonel_libxdp::{Binding, Umem, XdpError, bind};
+use mangonel_libxdp::{Binding, Umem, XdpError, bind, bind_with_umem};
 use mangonel_nic::nic::{self, Nic};
 
 use crate::{config::Config, worker};
 
-/// The daemon's interface attachments.
+/// The daemon's data plane: at most one running [`Router`].
 pub struct State {
-    attachments: Mutex<HashMap<String, Attachment>>,
+    router: Mutex<Option<Router>>,
 }
 
 impl Default for State {
@@ -26,38 +25,72 @@ impl Default for State {
 impl State {
     pub fn new() -> Self {
         Self {
-            attachments: Mutex::new(HashMap::new()),
+            router: Mutex::new(None),
         }
     }
 
-    /// Binds the interface and spawns one pinned worker per
-    /// queue. The interface stops passing traffic to the
-    /// kernel from here until detach.
-    fn attach(&self, interface: &str) -> Result<(), StateError> {
-        // The lock spans bind so a concurrent attach of the same
-        // interface is a clean error, not a race; attach is
-        // cold path.
-        let mut attachments = self.lock();
-        if attachments.contains_key(interface) {
-            return Err(StateError::AlreadyAttached(interface.to_owned()));
+    /// Brings the router up from `config`: sets each
+    /// interface to `workers` queues (`ethtool -L`),
+    /// binds WAN and LAN into one shared umem, and
+    /// spawns a pinned worker per queue forwarding both
+    /// directions. Replaces any running router, so it
+    /// doubles as reload.
+    ///
+    /// Forwarding is L2 today — a frame received on one
+    /// interface is transmitted unchanged out the other. L3
+    /// routing slots into the worker's per-packet step
+    /// later.
+    pub fn run(&self, config: &Config) -> Result<(), StateError> {
+        let wan = &config.data_plane.wan;
+        let lan = &config.data_plane.lan;
+        let workers = config.data_plane.workers;
+
+        let mut router = self.lock();
+        // Tear the old router down first: dropping it stops and
+        // joins its workers and unloads their XDP programs, so
+        // the queue-count change and rebind start clean.
+        *router = None;
+
+        // Queue count is a link-cycling ioctl, and a socket
+        // refuses to bind while it shrinks a queue, so set it
+        // before binding.
+        Nic::open(wan)?.set_queue_count(workers)?;
+        Nic::open(lan)?.set_queue_count(workers)?;
+
+        // Two interfaces share the umem, so a frame received on
+        // one and transmitted on the other never leaves it.
+        let Binding {
+            sockets: wan_sockets,
+            pools,
+            umem,
+            zero_copy,
+        } = bind(wan, 2)?;
+        let lan_sockets = bind_with_umem(lan, &umem)?;
+        if wan_sockets.len() != lan_sockets.len() {
+            return Err(StateError::QueueMismatch {
+                wan: wan_sockets.len(),
+                lan: lan_sockets.len(),
+            });
         }
 
         let cores = worker::allowed_cores().ok_or(StateError::NoCores)?;
-        let Binding {
-            pairs,
-            umem,
-            zero_copy,
-        } = bind(interface)?;
-
         let running = Arc::new(AtomicBool::new(true));
-        let mut counters = Vec::with_capacity(pairs.len());
-        let mut workers = Vec::with_capacity(pairs.len());
-        for (index, (sender, receiver)) in pairs.into_iter().enumerate() {
-            let counter = Arc::new(AtomicU64::new(0));
+        let mut wan_counters = Vec::with_capacity(wan_sockets.len());
+        let mut lan_counters = Vec::with_capacity(lan_sockets.len());
+        let mut handles = Vec::with_capacity(wan_sockets.len());
+        for (index, ((wan_socket, lan_socket), pool)) in wan_sockets
+            .into_iter()
+            .zip(lan_sockets)
+            .zip(pools)
+            .enumerate()
+        {
+            let wan_counter = Arc::new(AtomicU64::new(0));
+            let lan_counter = Arc::new(AtomicU64::new(0));
             let core = worker::assign_core(&cores, index);
             let handle = thread::spawn({
                 let running = running.clone();
-                let counter = counter.clone();
+                let wan_counter = wan_counter.clone();
+                let lan_counter = lan_counter.clone();
                 move || {
                     // Pinned inside the thread: affinity is per-thread
                     // and cannot be set from outside.
@@ -66,82 +99,77 @@ impl State {
                         "Failed to pin a worker to core {}. This is a bug.",
                         core.id
                     );
-                    worker::run(sender, receiver, running, counter);
+                    worker::forward(
+                        wan_socket,
+                        lan_socket,
+                        pool,
+                        &running,
+                        &wan_counter,
+                        &lan_counter,
+                    );
                 }
             });
-            counters.push(counter);
-            workers.push(handle);
+            wan_counters.push(wan_counter);
+            lan_counters.push(lan_counter);
+            handles.push(handle);
         }
 
-        attachments.insert(
-            interface.to_owned(),
-            Attachment {
-                running,
-                counters,
-                zero_copy,
-                workers,
-                _umem: umem,
-            },
-        );
+        *router = Some(Router {
+            running,
+            handles,
+            wan: wan.clone(),
+            lan: lan.clone(),
+            wan_counters,
+            lan_counters,
+            zero_copy,
+            _umem: umem,
+        });
 
         Ok(())
     }
 
-    /// Stops the interface's workers, joins them, and
-    /// releases the interface back to the kernel.
-    fn detach(&self, interface: &str) -> Result<(), StateError> {
-        let attachment = self
-            .lock()
-            .remove(interface)
-            .ok_or_else(|| StateError::NotAttached(interface.to_owned()))?;
-        // Dropped here, after the lock temporary is released:
-        // Attachment::drop stops and joins the workers off the
-        // lock, so status calls need not wait on the join.
-        drop(attachment);
-
-        Ok(())
+    /// Stops the router, if any; for shutdown.
+    pub fn stop(&self) {
+        *self.lock() = None;
     }
 
-    /// Brings the router up from `config`: sets each data-
-    /// plane interface to `workers` queues (`ethtool -L`),
-    /// then attaches WAN and LAN. Re-appliable — it
-    /// detaches them first, so `run` doubles as reload.
-    ///
-    /// The workers currently receive-count-drop, so this
-    /// blackholes both interfaces; forwarding, and the
-    /// shared umem it needs, come later.
-    pub fn run(&self, config: &Config) -> Result<(), StateError> {
-        let interfaces = [&config.data_plane.wan, &config.data_plane.lan];
-
-        // Clean slate so run is a reload: ignore "not attached".
-        for interface in interfaces {
-            let _ = self.detach(interface);
+    /// Per-interface counter snapshot: WAN then LAN, each
+    /// with one entry per queue. Empty when no router
+    /// is running.
+    pub fn status(&self) -> Vec<InterfaceStatus> {
+        match &*self.lock() {
+            None => Vec::new(),
+            Some(router) => vec![
+                InterfaceStatus {
+                    interface: router.wan.clone(),
+                    zero_copy: router.zero_copy,
+                    queues: snapshot(&router.wan_counters),
+                },
+                InterfaceStatus {
+                    interface: router.lan.clone(),
+                    zero_copy: router.zero_copy,
+                    queues: snapshot(&router.lan_counters),
+                },
+            ],
         }
-
-        // Queue count is a link-cycling ioctl and the socket
-        // refuses to bind while it shrinks a queue, so set it
-        // before attaching.
-        for interface in interfaces {
-            Nic::open(interface)?.set_queue_count(config.data_plane.workers)?;
-        }
-
-        for interface in interfaces {
-            self.attach(interface)?;
-        }
-
-        Ok(())
     }
 
     /// Every interface the host has, with the properties
-    /// that decide whether — and how well — it can be
-    /// attached, and whether this daemon has it attached.
+    /// that decide whether — and how well — it can be a
+    /// data-plane interface, and whether the running
+    /// router uses it.
     pub fn interfaces(&self) -> Result<Vec<InterfaceInfo>, StateError> {
-        let attached = self.lock();
+        let running = self.lock();
+        let uses = |name: &str| {
+            running
+                .as_ref()
+                .is_some_and(|router| router.wan == name || router.lan == name)
+        };
         let mut interfaces = Vec::new();
         for name in Nic::list()? {
             let nic = Nic::open(&name)?;
             interfaces.push(InterfaceInfo {
-                attached: attached.contains_key(&name),
+                attached: uses(&name),
                 index: nic.index(),
                 mac: nic.mac(),
                 mtu: nic.mtu(),
@@ -158,77 +186,58 @@ impl State {
         Ok(interfaces)
     }
 
-    /// Detaches every interface; for shutdown.
-    pub fn detach_all(&self) {
-        // Emptied under the lock; the drained attachments drop
-        // here, off the lock, each stopping and joining its
-        // workers.
-        let _attachments = std::mem::take(&mut *self.lock());
-    }
-
-    /// Cumulative per-queue packet counts, sorted by
-    /// interface name.
-    pub fn status(&self) -> Vec<InterfaceStatus> {
-        let mut interfaces: Vec<InterfaceStatus> = self
-            .lock()
-            .iter()
-            .map(|(interface, attachment)| InterfaceStatus {
-                interface: interface.clone(),
-                zero_copy: attachment.zero_copy,
-                queues: attachment
-                    .counters
-                    .iter()
-                    .map(|counter| counter.load(Ordering::Relaxed))
-                    .collect(),
-            })
-            .collect();
-        interfaces.sort_by(|a, b| a.interface.cmp(&b.interface));
-
-        interfaces
-    }
-
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Attachment>> {
+    fn lock(&self) -> MutexGuard<'_, Option<Router>> {
         // Recover a poisoned lock rather than propagating the
-        // panic: a failed attach unwinds before it inserts, so
-        // the map stays consistent, and one bad operation must
-        // not brick the daemon's control plane.
-        self.attachments
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        // panic: run replaces the router wholesale, so the
+        // Option is always in a consistent state, and one bad
+        // operation must not brick the control plane.
+        self.router.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// One attached interface: its workers and what they share.
+fn snapshot(counters: &[Arc<AtomicU64>]) -> Vec<u64> {
+    counters
+        .iter()
+        .map(|counter| counter.load(Ordering::Relaxed))
+        .collect()
+}
+
+/// The running data plane: the shared umem, the per-queue
+/// forwarding workers, and what they share.
 ///
-/// Cleanup lives in [`Drop`], so it runs however the
-/// attachment dies — a detach, daemon shutdown, or a panic
-/// unwinding through the owning [`State`] — not only on an
-/// explicit path. A dropped-but-not-stopped attachment
-/// would detach its still-spinning worker threads and leave
-/// the XDP program loaded on the interface.
-struct Attachment {
+/// Cleanup lives in [`Drop`], so it runs however the router
+/// dies — a reload, shutdown, or a panic unwinding through
+/// [`State`] — not only on an explicit path. A
+/// dropped-but-unstopped router would detach its still-
+/// spinning workers and leave both interfaces' XDP programs
+/// loaded.
+struct Router {
     running: Arc<AtomicBool>,
-    /// Packets received, one counter per queue.
-    counters: Vec<Arc<AtomicU64>>,
-    /// Whether the kernel bound this interface zero-copy.
+    handles: Vec<JoinHandle<()>>,
+    wan: String,
+    lan: String,
+    /// WAN→LAN packets forwarded, one counter per queue.
+    wan_counters: Vec<Arc<AtomicU64>>,
+    /// LAN→WAN packets forwarded, one counter per queue.
+    lan_counters: Vec<Arc<AtomicU64>>,
     zero_copy: bool,
-    workers: Vec<JoinHandle<()>>,
-    /// Held so it outlives every worker's socket halves;
-    /// its drop, last, unloads the XDP program.
+    /// Held so it outlives every worker's sockets; its
+    /// drop, last, unloads both interfaces' XDP
+    /// programs.
     _umem: Umem,
 }
 
-impl Drop for Attachment {
+impl Drop for Router {
     fn drop(&mut self) {
         // Signal, then join: each worker exits within one loop
-        // iteration and drops its socket halves. Once all are
-        // joined the only umem reference left is `_umem`,
-        // whose drop deletes it and reverts the interface.
+        // iteration and drops its sockets. Once all are joined
+        // the only umem reference left is `_umem`, whose drop
+        // reverts both interfaces.
         self.running.store(false, Ordering::Relaxed);
-        for worker in self.workers.drain(..) {
+        for handle in self.handles.drain(..) {
             // A panicked worker already reported itself; reap it
             // rather than double-panic out of drop.
-            let _ = worker.join();
+            let _ = handle.join();
         }
     }
 }
@@ -238,7 +247,7 @@ pub struct InterfaceStatus {
     pub interface: String,
     /// Whether the kernel bound this interface zero-copy.
     pub zero_copy: bool,
-    /// Packets received, cumulative, one entry per queue.
+    /// Packets forwarded, cumulative, one entry per queue.
     pub queues: Vec<u64>,
 }
 
@@ -256,18 +265,16 @@ pub struct InterfaceInfo {
     /// Driver module, e.g. `ice`, `veth`; `None` when the
     /// driver reports none.
     pub driver: Option<String>,
-    /// Whether this daemon currently has it attached.
+    /// Whether the running router uses it.
     pub attached: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum StateError {
-    #[error("The interface '{0}' is already attached.")]
-    AlreadyAttached(String),
-    #[error("The interface '{0}' is not attached.")]
-    NotAttached(String),
     #[error("No cores are available for pinning.")]
     NoCores,
+    #[error("WAN bound {wan} queues but LAN bound {lan}; they must match.")]
+    QueueMismatch { wan: usize, lan: usize },
     #[error("Failed to query interfaces: {0}")]
     Nic(#[from] nic::Error),
     #[error(transparent)]
