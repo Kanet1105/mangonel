@@ -138,7 +138,6 @@ impl Umem {
                 area: umem_area,
                 config: umem_config,
                 id: NEXT_UMEM_ID.fetch_add(1, Ordering::Relaxed),
-                frame_count,
             }
             .into(),
         };
@@ -150,11 +149,6 @@ impl Umem {
     /// minted against this umem.
     pub(crate) fn id(&self) -> usize {
         self.inner.id
-    }
-
-    /// Number of frames the region holds.
-    pub fn frame_count(&self) -> u32 {
-        self.inner.frame_count
     }
 
     pub(crate) fn as_ptr(&self) -> *mut xsk_umem {
@@ -180,7 +174,6 @@ struct UmemInner {
     area: UmemArea,
     config: xsk_umem_config,
     id: usize,
-    frame_count: u32,
 }
 
 impl Drop for UmemInner {

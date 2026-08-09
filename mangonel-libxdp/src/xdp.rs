@@ -10,11 +10,10 @@ use mangonel_libxdp_sys::{
     xsk_socket_config__bindgen_ty_1,
 };
 use mangonel_nic::nic::Nic;
-use rtrb::RingBuffer;
 
 use crate::{
     ring::{Consumer, DEFAULT_RING_SIZE, Producer, RingError, ring_buffer},
-    socket::{Socket, XdpReceiver, XdpSender},
+    socket::{FramePool, XdpSocket},
     umem::{DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, Umem, UmemError},
 };
 
@@ -22,11 +21,18 @@ use crate::{
 /// completion.
 const RINGS_PER_SOCKET: u32 = 4;
 
-/// What [`bind`] returns: the per-queue socket halves, the
-/// umem backing them, and whether the kernel bound
-/// zero-copy.
+/// What [`bind`] returns: one [`XdpSocket`] per queue, one
+/// seeded [`FramePool`] per queue, the umem backing them,
+/// and whether the kernel bound zero-copy.
+///
+/// `pools[i]` holds queue `i`'s share of the umem's frames.
+/// It is the worker's pool: a socket added over the same
+/// umem with [`bind_with_umem`] shares it, so a frame
+/// forwarded between the two interfaces returns to the pool
+/// it left.
 pub struct Binding {
-    pub pairs: Vec<(XdpSender, XdpReceiver)>,
+    pub sockets: Vec<XdpSocket>,
+    pub pools: Vec<FramePool>,
     pub umem: Umem,
     pub zero_copy: bool,
 }
@@ -42,21 +48,23 @@ struct QueueRings {
     rx: Consumer,
 }
 
-/// Opens one socket per usable queue (`min(rx, tx)`) on the
-/// interface, pair `i` bound to queue `i`, all sharing one
-/// [`Umem`], and splits each into its `Send` halves.
+/// Opens one [`XdpSocket`] per usable queue (`min(rx, tx)`)
+/// on the interface, socket `i` bound to queue `i`, all
+/// sharing one [`Umem`].
 ///
-/// Descriptors may cross pairs: any receiver's descriptor
-/// may go to any sender. The umem must outlive every pair.
-/// Attach mode and copy mode are the kernel's preference;
-/// see [`bind_with_umem`] to add another interface. The
-/// returned bool is whether the kernel bound zero-copy.
+/// The umem is sized for `umem_interfaces` interfaces
+/// sharing it: pass `1` for a lone interface, or the total
+/// when [`bind_with_umem`] will add more, so every socket's
+/// rings and every pool have frames. The umem must outlive
+/// every socket. Attach and copy mode are the kernel's
+/// preference; the returned bool is whether it bound
+/// zero-copy.
 ///
 /// # Panics
 ///
 /// Panics on broken libxdp/kernel contracts: unpopulated
 /// rings, a null socket, an interface with zero queues.
-pub fn bind(interface_name: impl AsRef<str>) -> Result<Binding, XdpError> {
+pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Binding, XdpError> {
     let interface_name = interface_name.as_ref();
 
     // The umem mapping counts against RLIMIT_MEMLOCK.
@@ -87,10 +95,12 @@ pub fn bind(interface_name: impl AsRef<str>) -> Result<Binding, XdpError> {
         })
         .collect::<Result<Vec<_>, RingError>>()?;
 
-    // Sized for every ring of every queue being full at once.
+    // Sized for every ring of every queue of every sharing
+    // interface being full at once, so the pools never starve.
     let frame_count = DEFAULT_RING_SIZE
         .checked_mul(RINGS_PER_SOCKET)
         .and_then(|frames| frames.checked_mul(queue_count))
+        .and_then(|frames| frames.checked_mul(umem_interfaces))
         .ok_or(Error::TooManyQueues { queue_count })?;
 
     let umem = {
@@ -111,8 +121,11 @@ pub fn bind(interface_name: impl AsRef<str>) -> Result<Binding, XdpError> {
     let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config();
 
-    let frames_per_queue = frame_count / queue_count;
-    let mut pairs = Vec::with_capacity(queue_count as usize);
+    // Every frame lives in some pool: one pool per queue, each
+    // its own disjoint slice of the umem.
+    let frames_per_pool = frame_count / queue_count;
+    let mut sockets = Vec::with_capacity(queue_count as usize);
+    let mut pools = Vec::with_capacity(queue_count as usize);
     // Set from queue 0; every queue on an interface binds in
     // the same mode.
     let mut zero_copy = false;
@@ -141,7 +154,7 @@ pub fn bind(interface_name: impl AsRef<str>) -> Result<Binding, XdpError> {
             )
         };
         if value.is_negative() {
-            // Bound sockets drop with `pairs`, before the umem;
+            // Bound sockets drop with `sockets`, before the umem;
             // unclaimed rings drop after it.
             return Err(Error::Initialize {
                 queue_id,
@@ -169,7 +182,7 @@ pub fn bind(interface_name: impl AsRef<str>) -> Result<Binding, XdpError> {
             .take()
             .expect("Queue rings taken twice. This is a bug.");
 
-        let socket = Socket::new(
+        let socket = XdpSocket::new(
             NonNull::new(socket)
                 .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
             tx,
@@ -184,43 +197,35 @@ pub fn bind(interface_name: impl AsRef<str>) -> Result<Binding, XdpError> {
             zero_copy = warn_copy_mode(interface_name, socket.socket_fd());
         }
 
-        // Seeded with this queue's slice, sized for the whole
-        // umem: migrating frames can pile into one pool, but
-        // never more than everything — a recycle can never
-        // find it full.
-        let (mut desc_producer, desc_consumer) = RingBuffer::<u64>::new(frame_count as usize);
-        for index in 0..frames_per_queue {
-            let frame = u64::from(queue_id * frames_per_queue + index);
-            desc_producer
-                .push(frame * u64::from(DEFAULT_FRAME_SIZE))
-                .expect("Prefilled more addresses than the ring buffer holds. This is a bug.");
+        // This queue's disjoint slice of the umem's frames.
+        let mut pool = FramePool::new(frames_per_pool as usize);
+        for index in 0..frames_per_pool {
+            let frame = u64::from(queue_id * frames_per_pool + index);
+            pool.push(frame * u64::from(DEFAULT_FRAME_SIZE));
         }
 
-        // Each ring is reached by exactly one half from here: tx
-        // and completion by XdpSender, rx and fill by
-        // XdpReceiver — what makes the socket's Sync sound.
-        pairs.push((
-            XdpSender::new(socket.clone(), desc_producer),
-            XdpReceiver::new(socket, desc_consumer),
-        ));
+        sockets.push(socket);
+        pools.push(pool);
     }
 
     Ok(Binding {
-        pairs,
+        sockets,
+        pools,
         umem,
         zero_copy,
     })
 }
 
-/// Opens one socket per usable queue on the interface,
-/// sharing an existing `umem`: frames received on either
-/// interface may be transmitted on the other with no copy.
-/// Binds with `XDP_SHARED_UMEM`, inheriting the first
-/// bind's copy mode.
+/// Opens one [`XdpSocket`] per usable queue on the
+/// interface, sharing an existing `umem`: a frame received
+/// on either interface may be transmitted on the other with
+/// no copy. Binds with `XDP_SHARED_UMEM`, inheriting the
+/// first bind's copy mode.
 ///
-/// The pairs start with empty pools: frames arrive only by
-/// migrating from the umem's creating interface through
-/// forwarding. Until then the receivers deliver nothing.
+/// Brings no pools: these sockets share the per-queue pools
+/// from the [`bind`] that created the umem — which is what
+/// makes forwarding sound. Size that umem for both
+/// interfaces via `bind`'s `umem_interfaces`.
 ///
 /// # Panics
 ///
@@ -228,7 +233,7 @@ pub fn bind(interface_name: impl AsRef<str>) -> Result<Binding, XdpError> {
 pub fn bind_with_umem(
     interface_name: impl AsRef<str>,
     umem: &Umem,
-) -> Result<Vec<(XdpSender, XdpReceiver)>, XdpError> {
+) -> Result<Vec<XdpSocket>, XdpError> {
     let interface_name = interface_name.as_ref();
 
     let queue_count = Nic::open(interface_name).map_err(Error::Nic)?.xdp_queues();
@@ -241,7 +246,7 @@ pub fn bind_with_umem(
     let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config();
 
-    let mut pairs = Vec::with_capacity(queue_count as usize);
+    let mut sockets = Vec::with_capacity(queue_count as usize);
     for queue_id in 0..queue_count {
         // Fresh rings; none can be the umem's saved pair, so no
         // drop-order care is needed.
@@ -279,7 +284,7 @@ pub fn bind_with_umem(
             "xsk_socket__create_shared left a ring unpopulated. This is a bug."
         );
 
-        let socket = Socket::new(
+        let socket = XdpSocket::new(
             NonNull::new(socket)
                 .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
             tx_ring,
@@ -294,17 +299,10 @@ pub fn bind_with_umem(
             warn_copy_mode(interface_name, socket.socket_fd());
         }
 
-        // Empty, but sized so every frame in the umem migrating
-        // here cannot overflow it.
-        let (desc_producer, desc_consumer) = RingBuffer::<u64>::new(umem.frame_count() as usize);
-
-        pairs.push((
-            XdpSender::new(socket.clone(), desc_producer),
-            XdpReceiver::new(socket, desc_consumer),
-        ));
+        sockets.push(socket);
     }
 
-    Ok(pairs)
+    Ok(sockets)
 }
 
 /// Zero flags: native attach and zero-copy where the driver
@@ -422,11 +420,11 @@ impl From<UmemError> for XdpError {
     }
 }
 
-// Guards the unsafe Send/Sync impls the tx/rx split rests
-// on; nothing else in the crate would catch their removal.
+// Guards the unsafe Send impls the worker move rests on;
+// nothing else in the crate would catch their removal.
 const _: () = {
     const fn assert_send<T: Send>() {}
-    assert_send::<XdpSender>();
-    assert_send::<XdpReceiver>();
+    assert_send::<XdpSocket>();
+    assert_send::<FramePool>();
     assert_send::<Umem>();
 };

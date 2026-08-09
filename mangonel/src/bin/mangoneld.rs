@@ -115,7 +115,7 @@ async fn main() {
 
     notify("STOPPING=1\n");
     eprintln!("mangoneld: detaching and exiting");
-    app.state.detach_all();
+    app.state.stop();
     let _ = std::fs::remove_file(&socket_path);
 }
 
@@ -393,8 +393,7 @@ struct ApiError(StatusCode, String);
 impl From<StateError> for ApiError {
     fn from(error: StateError) -> Self {
         let code = match &error {
-            StateError::AlreadyAttached(_) => StatusCode::CONFLICT,
-            StateError::NotAttached(_) => StatusCode::NOT_FOUND,
+            StateError::QueueMismatch { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             StateError::NoCores | StateError::Nic(_) | StateError::Xdp(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
