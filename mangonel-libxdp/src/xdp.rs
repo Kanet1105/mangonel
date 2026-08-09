@@ -52,7 +52,7 @@ pub fn bind(
     let interface_name = interface_name.as_ref();
 
     // The umem mapping counts against RLIMIT_MEMLOCK.
-    setrlimit();
+    setrlimit().map_err(Error::Setrlimit)?;
 
     let queue_count = Nic::open(interface_name).map_err(Error::Nic)?.xdp_queues();
     // The kernel refuses zero-queue interfaces, and counting
@@ -307,7 +307,11 @@ fn socket_config() -> xsk_socket_config {
     }
 }
 
-fn setrlimit() {
+/// Raises the locked-memory limit the umem mapping counts
+/// against. Fails without root or CAP_SYS_RESOURCE — an
+/// environmental condition the caller can act on, so an
+/// error rather than a panic.
+fn setrlimit() -> Result<(), io::Error> {
     let value = unsafe {
         let rlimit = libc::rlimit {
             // RLIM_INFINITY is the constant matching libc::rlimit's field
@@ -319,8 +323,10 @@ fn setrlimit() {
         libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit)
     };
     if value.is_negative() {
-        panic!("Failed to set rlimit: {}", std::io::Error::last_os_error());
+        return Err(io::Error::last_os_error());
     }
+
+    Ok(())
 }
 
 /// Whether the kernel bound the socket zero-copy. A failed
@@ -368,6 +374,8 @@ enum Error {
     Ring(#[from] RingError),
     #[error(transparent)]
     Umem(#[from] UmemError),
+    #[error("Failed to raise RLIMIT_MEMLOCK (need root or CAP_SYS_RESOURCE): {0}")]
+    Setrlimit(io::Error),
     #[error("Interface name contains null character(s): {0}")]
     InvalidInterfaceName(NulError),
     #[error("Failed to query the interface: {0}")]
