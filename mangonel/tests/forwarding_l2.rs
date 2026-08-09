@@ -1,8 +1,10 @@
-//! End-to-end forwarding test. Builds an L2 topology — two
-//! hosts in network namespaces, mangonel bridging two veths
-//! between them — brings the router up from a config, pings
-//! across, and checks the per-queue counters climbed both
-//! ways. Needs root; run via `just smoke`.
+//! End-to-end L2 forwarding test. With no `[routing]`
+//! config the router bridges: two hosts in network
+//! namespaces share one subnet across two veths, and
+//! mangonel forwards frames unchanged. Brings the router up
+//! from a config, pings across, and checks the per-queue
+//! counters climbed both ways. Needs root; run via `just
+//! smoke`.
 //!
 //! ```sh
 //! cargo test -p mangonel --no-run
