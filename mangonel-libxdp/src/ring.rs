@@ -13,10 +13,12 @@ pub fn ring_buffer(size: u32) -> Result<(Producer, Consumer), RingError> {
 
     let producer = Producer {
         head: NonNull::from(Box::leak(Box::new(xsk_ring_prod::default()))),
+        size,
     };
 
     let consumer = Consumer {
         tail: NonNull::from(Box::leak(Box::new(xsk_ring_cons::default()))),
+        size,
     };
 
     Ok((producer, consumer))
@@ -33,6 +35,7 @@ pub fn ring_buffer(size: u32) -> Result<(Producer, Consumer), RingError> {
 /// reads.
 pub struct Producer {
     head: NonNull<xsk_ring_prod>,
+    size: u32,
 }
 
 impl Drop for Producer {
@@ -45,6 +48,10 @@ impl Producer {
     #[inline]
     pub fn as_ptr(&self) -> *mut xsk_ring_prod {
         self.head.as_ptr()
+    }
+
+    pub fn size(&self) -> u32 {
+        self.size
     }
 
     /// Whether libxdp has populated this ring.
@@ -124,6 +131,7 @@ impl Producer {
 /// pointer to it.
 pub struct Consumer {
     tail: NonNull<xsk_ring_cons>,
+    size: u32,
 }
 
 impl Drop for Consumer {
@@ -136,6 +144,10 @@ impl Consumer {
     #[inline]
     pub fn as_ptr(&self) -> *mut xsk_ring_cons {
         self.tail.as_ptr()
+    }
+
+    pub fn size(&self) -> u32 {
+        self.size
     }
 
     /// Whether libxdp has populated this ring. Same
