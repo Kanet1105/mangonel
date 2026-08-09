@@ -6,21 +6,16 @@ use std::{
 };
 
 use libc::{
-    _SC_PAGESIZE, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_PRIVATE, PROT_READ, PROT_WRITE, mmap,
-    munmap, sysconf,
+    MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_PRIVATE, PROT_READ, PROT_WRITE, mmap, munmap,
 };
 use mangonel_libxdp_sys::{
     xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
 };
 
-use crate::ring::{Consumer, Producer};
-
-const MIN_FRAME_SIZE: u32 = 2048;
-
-fn max_frame_size() -> u32 {
-    let value = unsafe { sysconf(_SC_PAGESIZE) };
-    u32::try_from(value).expect("sysconf(_SC_PAGESIZE) returned an implausible page size.")
-}
+use crate::{
+    ring::{Consumer, Producer},
+    util::{MIN_FRAME_SIZE, max_frame_size},
+};
 
 struct UmemArea {
     address: NonNull<c_void>,
