@@ -1,7 +1,11 @@
 //! The mangonel control daemon: an HTTP+JSON API over a
 //! Unix socket, dispatching to [`State`].
 
-use std::{os::unix::fs::PermissionsExt, sync::Arc, time::Instant};
+use std::{
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+    sync::Arc,
+    time::Instant,
+};
 
 use axum::{
     Json, Router,
@@ -42,6 +46,14 @@ async fn main() {
         .route("/api/v1/shutdown", post(shutdown))
         .with_state(app.clone());
 
+    // Under systemd RuntimeDirectory makes this; created here
+    // too so a direct run works.
+    if let Some(parent) = std::path::Path::new(&socket_path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("Failed to create {}: {error}", parent.display()));
+    }
     // A stale socket from a crashed daemon would block the
     // bind.
     let _ = std::fs::remove_file(&socket_path);
@@ -51,15 +63,82 @@ async fn main() {
     std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
         .expect("Failed to restrict the control socket.");
     eprintln!("mangoneld: listening on {socket_path}");
+    // Tell systemd (Type=notify) the socket is up; a no-op when
+    // not launched under systemd.
+    notify("READY=1\n");
 
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal(app.shutdown.clone()))
         .await
         .expect("The control server failed.");
 
+    notify("STOPPING=1\n");
     eprintln!("mangoneld: detaching and exiting");
     app.state.detach_all();
     let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Sends a state line to systemd's notification socket when
+/// launched under `Type=notify`, else a no-op. Best effort:
+/// a failed notification is not fatal.
+fn notify(state: &str) {
+    let Some(socket) = std::env::var_os("NOTIFY_SOCKET") else {
+        return;
+    };
+    let socket = socket.as_bytes();
+    if socket.is_empty() {
+        return;
+    }
+
+    // SAFETY: an all-zero sockaddr_un is a valid empty AF_UNIX
+    // address; the family and path are filled in below.
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::sa_family_t::try_from(libc::AF_UNIX)
+        .expect("AF_UNIX does not fit sa_family_t. This is a bug.");
+
+    // A leading '@' means the abstract namespace, encoded as a
+    // leading NUL byte followed by the name.
+    let is_abstract = socket[0] == b'@';
+    let name = if is_abstract { &socket[1..] } else { socket };
+    let start = usize::from(is_abstract);
+    if start + name.len() > size_of_val(&address.sun_path) {
+        return;
+    }
+    // Copy as bytes: sun_path is c_char, whose signedness is
+    // platform-dependent, so a per-byte cast is not portable.
+    // SAFETY: the bound above keeps the write inside sun_path.
+    unsafe {
+        let destination = address.sun_path.as_mut_ptr().cast::<u8>().add(start);
+        std::ptr::copy_nonoverlapping(name.as_ptr(), destination, name.len());
+    }
+    // Address length: everything before sun_path, plus the
+    // bytes written. Filesystem paths carry a trailing NUL
+    // (already zeroed); abstract names do not.
+    let base = size_of::<libc::sockaddr_un>() - size_of_val(&address.sun_path);
+    let used = start + name.len() + usize::from(!is_abstract);
+    let Ok(address_len) = libc::socklen_t::try_from(base + used) else {
+        return;
+    };
+
+    // SAFETY: an unbound datagram socket may sendto a named
+    // address; the pointer and length describe a valid
+    // sockaddr_un. The result is ignored — notification is best
+    // effort — and the fd is always closed.
+    unsafe {
+        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
+        if fd < 0 {
+            return;
+        }
+        libc::sendto(
+            fd,
+            state.as_ptr().cast(),
+            state.len(),
+            libc::MSG_NOSIGNAL,
+            (&raw const address).cast(),
+            address_len,
+        );
+        libc::close(fd);
+    }
 }
 
 /// Reads `--socket <path>`, else the well-known default.

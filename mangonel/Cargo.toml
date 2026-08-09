@@ -8,13 +8,13 @@ license = { workspace = true }
 mangonel-libxdp = { workspace = true }
 
 axum = { workspace = true }
+clap = { workspace = true }
 core_affinity = { workspace = true }
+libc = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
-serde_json = { workspace = true }
 
 [lints]
 workspace = true
