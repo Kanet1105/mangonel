@@ -9,12 +9,12 @@ pub const DEFAULT_FRAME_SIZE: u32 = XSK_UMEM__DEFAULT_FRAME_SIZE;
 pub const DEFAULT_FRAME_HEADROOM: u32 = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
 pub const DEFAULT_RING_SIZE: u32 = XSK_RING_PROD__DEFAULT_NUM_DESCS;
 
-pub fn max_frame_size() -> u32 {
+pub(crate) fn max_frame_size() -> u32 {
     let value = unsafe { sysconf(_SC_PAGE_SIZE) };
     u32::try_from(value).expect("sysconf(_SC_PAGESIZE) returned an implausible page size.")
 }
 
-pub fn setrlimit() {
+pub(crate) fn setrlimit() {
     let value = unsafe {
         let rlimit = libc::rlimit {
             // RLIM_INFINITY is the constant matching libc::rlimit's field
