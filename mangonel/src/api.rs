@@ -5,7 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Default control socket, overridable with `--socket`.
-pub const DEFAULT_SOCKET_PATH: &str = "/run/mangonel.sock";
+/// The parent is the systemd `RuntimeDirectory`.
+pub const DEFAULT_SOCKET_PATH: &str = "/run/mangonel/mangonel.sock";
 
 /// `GET /api/v1/status`.
 #[derive(Debug, Serialize, Deserialize)]

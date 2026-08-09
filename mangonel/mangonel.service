@@ -1,0 +1,25 @@
+[Unit]
+Description=Mangonel AF_XDP router
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/mangoneld
+# Creates /run/mangonel (0755, auto-removed on stop); the
+# control socket lives inside it.
+RuntimeDirectory=mangonel
+Restart=on-failure
+RestartSec=1
+# mangoneld handles SIGTERM and tears down its attachments; give
+# it room before SIGKILL.
+TimeoutStopSec=10
+# AF_XDP essentials: CAP_BPF to load the XDP program,
+# CAP_NET_ADMIN to bind the socket and attach, CAP_SYS_RESOURCE
+# to raise RLIMIT_MEMLOCK. Listed for when a future User=
+# drops root; harmless for the default root service.
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_BPF
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

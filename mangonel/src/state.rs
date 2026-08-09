@@ -88,19 +88,20 @@ impl State {
             .lock()
             .remove(interface)
             .ok_or_else(|| StateError::NotAttached(interface.to_owned()))?;
-        // Joined outside the lock: workers exit within one loop
-        // iteration, but status calls need not wait on it.
-        attachment.stop();
+        // Dropped here, after the lock temporary is released:
+        // Attachment::drop stops and joins the workers off the
+        // lock, so status calls need not wait on the join.
+        drop(attachment);
 
         Ok(())
     }
 
     /// Detaches every interface; for shutdown.
     pub fn detach_all(&self) {
-        let attachments = std::mem::take(&mut *self.lock());
-        for attachment in attachments.into_values() {
-            attachment.stop();
-        }
+        // Emptied under the lock; the drained attachments drop
+        // here, off the lock, each stopping and joining its
+        // workers.
+        let _attachments = std::mem::take(&mut *self.lock());
     }
 
     /// Cumulative per-queue packet counts, sorted by
@@ -135,24 +136,34 @@ impl State {
 }
 
 /// One attached interface: its workers and what they share.
+///
+/// Cleanup lives in [`Drop`], so it runs however the
+/// attachment dies — a detach, daemon shutdown, or a panic
+/// unwinding through the owning [`State`] — not only on an
+/// explicit path. A dropped-but-not-stopped attachment
+/// would detach its still-spinning worker threads and leave
+/// the XDP program loaded on the interface.
 struct Attachment {
     running: Arc<AtomicBool>,
     /// Packets received, one counter per queue.
     counters: Vec<Arc<AtomicU64>>,
     workers: Vec<JoinHandle<()>>,
-    /// Held so it outlives every worker's socket halves.
+    /// Held so it outlives every worker's socket halves;
+    /// its drop, last, unloads the XDP program.
     _umem: Umem,
 }
 
-impl Attachment {
-    /// Stops and joins the workers, then drops: the pairs
-    /// died with the workers, so dropping the umem unloads
-    /// the XDP program and the interface reverts to the
-    /// kernel.
-    fn stop(self) {
+impl Drop for Attachment {
+    fn drop(&mut self) {
+        // Signal, then join: each worker exits within one loop
+        // iteration and drops its socket halves. Once all are
+        // joined the only umem reference left is `_umem`,
+        // whose drop deletes it and reverts the interface.
         self.running.store(false, Ordering::Relaxed);
-        for worker in self.workers {
-            worker.join().expect("A worker panicked. This is a bug.");
+        for worker in self.workers.drain(..) {
+            // A panicked worker already reported itself; reap it
+            // rather than double-panic out of drop.
+            let _ = worker.join();
         }
     }
 }
