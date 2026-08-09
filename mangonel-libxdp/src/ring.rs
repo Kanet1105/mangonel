@@ -1,10 +1,13 @@
 use std::ptr::NonNull;
 
 use mangonel_libxdp_sys::{
-    xdp_desc, xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release,
-    xsk_ring_cons__rx_desc, xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve,
-    xsk_ring_prod__submit, xsk_ring_prod__tx_desc,
+    XSK_RING_PROD__DEFAULT_NUM_DESCS, xdp_desc, xsk_ring_cons, xsk_ring_cons__comp_addr,
+    xsk_ring_cons__peek, xsk_ring_cons__release, xsk_ring_cons__rx_desc, xsk_ring_prod,
+    xsk_ring_prod__fill_addr, xsk_ring_prod__reserve, xsk_ring_prod__submit,
+    xsk_ring_prod__tx_desc,
 };
+
+pub const DEFAULT_RING_SIZE: u32 = XSK_RING_PROD__DEFAULT_NUM_DESCS;
 
 pub fn ring_buffer(size: u32) -> Result<(Producer, Consumer), RingError> {
     if !size.is_power_of_two() {
@@ -24,15 +27,9 @@ pub fn ring_buffer(size: u32) -> Result<(Producer, Consumer), RingError> {
     Ok((producer, consumer))
 }
 
-/// Ring producer handle.
-///
-/// Heap-allocated so the struct keeps a stable address:
-/// `xsk_umem__create` saves the pointer to the fill and
-/// completion rings and dereferences it again later, so the
-/// allocation must not move once registered.
-/// Zero-initialized here, then populated by
-/// `xsk_umem__create` or `xsk_socket__create` before any
-/// reads.
+/// Ring producer handle. Heap-allocated for a stable
+/// address: libxdp saves the pointer at registration and
+/// dereferences it later. Zeroed until then.
 pub struct Producer {
     head: NonNull<xsk_ring_prod>,
     size: u32,
@@ -54,22 +51,13 @@ impl Producer {
         self.size
     }
 
-    /// Whether libxdp has populated this ring.
-    ///
-    /// `ring_buffer` hands out a zeroed struct;
-    /// `xsk_umem__create` and `xsk_socket__create` fill
-    /// it in. Every accessor below is pointer
-    /// arithmetic off `ring`, so they are only meaningful —
-    /// and only sound — once this returns true. Checked
-    /// once by whoever registers the ring,
-    /// which is what lets the accessors skip the check per
-    /// slot.
+    /// Whether libxdp has populated this ring. The
+    /// accessors below are only sound once true; checked
+    /// once by whoever registers the ring.
     pub fn is_registered(&self) -> bool {
-        // SAFETY: The allocation is live for the lifetime of self
-        // and holds an initialized xsk_ring_prod. Read
-        // through the raw pointer rather than a reference:
-        // libxdp keeps its own pointer to this struct and writes
-        // through it during umem and socket creation.
+        // SAFETY: The allocation is live for self's lifetime. Read
+        // through the raw pointer: libxdp writes through its
+        // own pointer to this struct.
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
@@ -77,41 +65,32 @@ impl Producer {
     pub fn reserve(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
+
         (available, index)
     }
 
-    /// Writes a tx descriptor into the slot at `index`.
-    ///
-    /// Writes by value rather than lending `&mut` into the
-    /// ring: a reference returned from `&self` would
-    /// claim an exclusivity this method cannot
-    /// enforce — two calls with the same index (or indices
-    /// `size` apart, which the mask folds together)
-    /// would yield aliasing `&mut`. [`Consumer`]
-    /// already reads by copy for the same reason.
+    /// Writes a tx descriptor into the slot at `index`. By
+    /// value, not `&mut` into the ring: two calls with
+    /// aliasing indices would otherwise yield aliasing
+    /// `&mut`.
     #[inline]
     pub fn set_descriptor(&self, index: u32, address: u64, length: u32) {
-        // SAFETY: The ring is registered, so
-        // `xsk_ring_prod__tx_desc` returns `&ring[index &
-        // mask]` — a non-null pointer to a slot inside the
-        // mapped ring, which this producer owns between reserve and
-        // submit. The writes go through the raw pointer, so
-        // no reference into the ring outlives this call.
+        // SAFETY: The ring is registered; the index is masked into
+        // range, and the slot is owned by this producer
+        // between reserve and submit. No reference outlives
+        // the call.
         unsafe {
             let slot = xsk_ring_prod__tx_desc(self.as_ptr(), index);
             (*slot).addr = address;
             (*slot).len = length;
-            // The kernel rejects descriptors with unknown option bits,
-            // so this is zeroed explicitly rather than
-            // trusting the recycled slot's residue to still
-            // be zero.
+            // The kernel rejects unknown option bits; recycled slot
+            // residue is not trusted to be zero.
             (*slot).options = 0;
         }
     }
 
-    /// Writes a frame address into the fill-ring slot at
-    /// `index`. Same write-by-value contract as
-    /// [`Self::set_descriptor`].
+    /// Writes a fill-ring address into the slot at `index`.
+    /// Same contract as [`Self::set_descriptor`].
     #[inline]
     pub fn set_fill_address(&self, index: u32, address: u64) {
         // SAFETY: As above, for the fill ring.
@@ -124,11 +103,8 @@ impl Producer {
     }
 }
 
-/// Ring consumer handle.
-///
-/// Heap-allocated for the same reason as [`Producer`]: the
-/// address must stay stable once libxdp has been handed a
-/// pointer to it.
+/// Ring consumer handle. Heap-allocated for the same
+/// reason as [`Producer`].
 pub struct Consumer {
     tail: NonNull<xsk_ring_cons>,
     size: u32,
@@ -150,10 +126,9 @@ impl Consumer {
         self.size
     }
 
-    /// Whether libxdp has populated this ring. Same
-    /// contract as [`Producer::is_registered`].
+    /// As [`Producer::is_registered`].
     pub fn is_registered(&self) -> bool {
-        // SAFETY: Same reasoning as Producer::is_registered.
+        // SAFETY: As Producer::is_registered.
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
@@ -161,29 +136,21 @@ impl Consumer {
     pub fn peek(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
+
         (filled, index)
     }
 
-    /// Copies the slot out rather than lending a reference
-    /// into the ring: the kernel may write this slot
-    /// again as soon as `release` hands it back, and
-    /// a live `&xdp_desc` would be asserting that cannot
-    /// happen.
+    /// Copies the slot out: the kernel may rewrite it as
+    /// soon as `release` hands it back.
     #[inline]
     pub fn descriptor(&self, index: u32) -> xdp_desc {
-        // SAFETY: The ring is registered, so
-        // `xsk_ring_cons__rx_desc` returns `&ring[index &
-        // mask]` — a non-null pointer to an initialized slot
-        // inside the mapped ring. The index is masked into range,
-        // so no index can push it out of bounds; one
-        // outside the range peek reported reads
-        // a stale descriptor, which is a correctness bug and not
-        // unsound.
+        // SAFETY: The ring is registered and the index is masked
+        // into range; an index beyond what peek reported
+        // reads stale data, which is a bug but not unsound.
         unsafe { xsk_ring_cons__rx_desc(self.as_ptr(), index).read() }
     }
 
-    /// Copies the address out, for the same reason as
-    /// [`Self::descriptor`].
+    /// Copies the address out; as [`Self::descriptor`].
     #[inline]
     pub fn completion_address(&self, index: u32) -> u64 {
         // SAFETY: As above, for the completion ring.
