@@ -34,6 +34,9 @@ enum Command {
     Stats,
     /// List the host's interfaces and their properties.
     Interfaces,
+    /// Bring the router up from the daemon's config file
+    /// (also reloads).
+    Run,
     /// Attach an interface to the data plane.
     Attach { interface: String },
     /// Detach an interface.
@@ -129,6 +132,10 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                 &format!("/api/v1/interfaces/{interface}/clean"),
             )?;
             println!("cleaned {interface}");
+        }
+        Command::Run => {
+            post(&cli.socket, "/api/v1/run")?;
+            println!("router running");
         }
         Command::Shutdown => {
             post(&cli.socket, "/api/v1/shutdown")?;

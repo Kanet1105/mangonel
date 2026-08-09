@@ -1,0 +1,20 @@
+# Mangonel daemon configuration. Install to
+# /etc/mangonel/config.toml (or point mangoneld --config at it).
+# The daemon reads it at startup and re-reads it on `run`.
+
+[data_plane]
+wan = "enp1s0f0"
+lan = "enp1s0f1"
+# Queues set on each interface (ethtool -L) and, with one
+# worker per queue, the worker count.
+workers = 4
+
+[control]
+# The Unix control socket. Always on; filesystem permissions
+# are the authorization.
+socket = "/run/mangonel/mangonel.sock"
+# Optional TCP control listener for a local frontend. Keep it
+# on loopback — AF_XDP takes every packet on the WAN/LAN
+# interfaces, and the API is unauthenticated. Reach it
+# remotely with an SSH port-forward.
+tcp = "127.0.0.1:8080"

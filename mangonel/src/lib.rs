@@ -7,5 +7,6 @@
 //! contract the daemon serves.
 
 pub mod api;
+pub mod config;
 pub mod state;
 mod worker;

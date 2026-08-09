@@ -25,6 +25,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "signal"] }
+toml = "0.9"
 
 # Numeric conversions in these crates cross kernel ABI widths (u32 ring
 # indices, u64 umem addresses, usize lengths), so every lossy or
