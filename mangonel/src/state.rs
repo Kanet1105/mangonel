@@ -60,9 +60,7 @@ impl State {
             match Nic::open(interface)?.set_queue_count(workers) {
                 Ok(()) => {}
                 Err(error) if error.is_unsupported() => {
-                    eprintln!(
-                        "mangonel: {interface}: driver cannot set queues; using its own count"
-                    );
+                    tracing::warn!(interface, "driver cannot set queues; using its own count");
                 }
                 Err(error) => return Err(error.into()),
             }

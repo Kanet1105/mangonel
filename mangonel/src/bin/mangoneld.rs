@@ -38,13 +38,14 @@ struct App {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    init_tracing();
     let arguments = Arguments::parse();
     // The config's control settings apply at startup; a missing
     // file leaves the daemon on defaults with no data plane.
     let config = match Config::load(&arguments.config_path) {
         Ok(config) => Some(config),
         Err(error) => {
-            eprintln!("mangoneld: {error}; starting with no data plane");
+            tracing::warn!(%error, "no config; starting with no data plane");
             None
         }
     };
@@ -77,7 +78,7 @@ async fn main() {
         Some(address) => Some(bind_tcp(address).await),
         None => None,
     };
-    eprintln!("mangoneld: listening on {socket_path}");
+    tracing::info!(socket = socket_path, "control socket listening");
     // Tell systemd (Type=notify) the sockets are up; a no-op
     // when not launched under systemd.
     notify("READY=1\n");
@@ -90,7 +91,7 @@ async fn main() {
             .await
             .expect("The run task panicked.")
         {
-            eprintln!("mangoneld: failed to bring up the router: {error}");
+            tracing::error!(%error, "failed to bring up the router");
         }
     }
 
@@ -114,9 +115,21 @@ async fn main() {
     }
 
     notify("STOPPING=1\n");
-    eprintln!("mangoneld: detaching and exiting");
+    tracing::info!("stopping the router and exiting");
     app.state.stop();
     let _ = std::fs::remove_file(&socket_path);
+}
+
+/// Installs the tracing subscriber: events to stderr,
+/// filtered by `RUST_LOG` (default `info`). journald
+/// captures stderr under systemd.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 /// Binds the control Unix socket, restricted to its owner.
@@ -152,12 +165,13 @@ async fn bind_tcp(address: &str) -> TcpListener {
         .local_addr()
         .is_ok_and(|addr| addr.ip().is_loopback());
     if !loopback {
-        eprintln!(
-            "mangoneld: WARNING: control TCP on {address} is not loopback; the API is \
-             unauthenticated — restrict it to a management network."
+        tracing::warn!(
+            %address,
+            "control TCP is not loopback; the API is unauthenticated — restrict it to a \
+             management network"
         );
     }
-    eprintln!("mangoneld: control TCP on {address}");
+    tracing::info!(%address, "control TCP listening");
 
     listener
 }
