@@ -227,14 +227,14 @@ impl Nic {
         self.channels.as_ref()
     }
 
-    /// Collapses the interface to a single RX and TX queue,
-    /// so all traffic lands on queue 0 — the one queue
-    /// a lone AF_XDP socket binds to.
+    /// Sets the interface to `count` RX and TX queues, so
+    /// an AF_XDP socket can bind queues `0..count` and
+    /// RSS spreads flows across them.
     ///
-    /// Equivalent to `ethtool -L <if> combined 1`, or `rx 1
-    /// tx 1` on drivers that count RX and TX channels
-    /// separately. See `single_queue_counts` for
-    /// why the two forms are not interchangeable.
+    /// Equivalent to `ethtool -L <if> combined N`, or `rx N
+    /// tx N` on drivers that count RX and TX channels
+    /// separately. See `queue_counts` for why the two forms
+    /// are not interchangeable.
     ///
     /// Requires `CAP_NET_ADMIN`. The driver reallocates its
     /// rings to service the request, which momentarily
@@ -253,18 +253,17 @@ impl Nic {
     /// implementing neither half of the channels API —
     /// the same ones [`Nic::channels`] reports as
     /// `None`. It is a no-op, reported as success, when the
-    /// interface already has exactly one queue of each
-    /// kind: the kernel compares against the
-    /// current counts and returns early before touching the
-    /// driver.
+    /// interface already has the requested counts: the
+    /// kernel compares against the current counts and
+    /// returns early before touching the driver.
     ///
     /// Refreshes `self` on success, since the queue counts
     /// and channel configuration this snapshot holds
     /// are exactly what the call changed.
-    pub fn set_single_queue(&mut self) -> Result<(), Error> {
+    pub fn set_queue_count(&mut self, count: u32) -> Result<(), Error> {
         let sock = control_socket(&self.name)?;
         let current = channels(&sock, &self.name)?;
-        let (rx_count, tx_count, combined_count) = single_queue_counts(&current);
+        let (rx_count, tx_count, combined_count) = channel_counts(&current, count);
 
         let mut req = EthtoolChannels {
             cmd: ETHTOOL_SCHANNELS,
@@ -289,14 +288,15 @@ impl Nic {
     }
 }
 
-/// The `(rx_count, tx_count, combined_count)` leaving one
-/// RX and one TX queue, given what the driver reports now.
+/// The `(rx_count, tx_count, combined_count)` leaving
+/// `count` RX and TX queues, given what the driver reports
+/// now.
 ///
 /// Drivers fall into two camps and reject the other camp's
 /// request. One that serves both directions from `combined`
 /// channels has `max_rx`/`max_tx` of zero, so asking for
-/// `rx 1 tx 1` is `EINVAL`; one with dedicated rings has
-/// `max_combined` of zero and rejects `combined 1` the same
+/// `rx N tx N` is `EINVAL`; one with dedicated rings has
+/// `max_combined` of zero and rejects `combined N` the same
 /// way. The current counts say which camp this interface is
 /// in.
 ///
@@ -304,11 +304,11 @@ impl Nic {
 /// is still answered with dedicated queues — it is already
 /// configured that way, and the point here is the queue
 /// count, not migrating it to another channel layout.
-fn single_queue_counts(current: &Channels) -> (u32, u32, u32) {
+fn channel_counts(current: &Channels, count: u32) -> (u32, u32, u32) {
     if current.combined > 0 {
-        (0, 0, 1)
+        (0, 0, count)
     } else {
-        (1, 1, 0)
+        (count, count, 0)
     }
 }
 
@@ -619,7 +619,7 @@ mod tests {
         assert!(lo.tx_queues() >= 1);
         assert!(Nic::list().unwrap().iter().any(|n| n == "lo"));
 
-        match lo.set_single_queue() {
+        match lo.set_queue_count(1) {
             Err(Error::Ioctl("SIOCETHTOOL(GCHANNELS)", name, e)) => {
                 assert_eq!(name, "lo");
                 assert_eq!(e.raw_os_error(), Some(libc::EOPNOTSUPP));
@@ -629,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn single_queue_counts_follow_the_driver_style() {
+    fn channel_counts_follow_the_driver_style() {
         fn channels_with(rx: u32, tx: u32, combined: u32) -> Channels {
             Channels {
                 rx,
@@ -644,13 +644,13 @@ mod tests {
         }
 
         // mlx5-style: everything through combined channels.
-        assert_eq!(single_queue_counts(&channels_with(0, 0, 8)), (0, 0, 1));
-        // Dedicated rx/tx channels get one of each.
-        assert_eq!(single_queue_counts(&channels_with(4, 4, 0)), (1, 1, 0));
+        assert_eq!(channel_counts(&channels_with(0, 0, 8), 4), (0, 0, 4));
+        // Dedicated rx/tx channels get N of each.
+        assert_eq!(channel_counts(&channels_with(4, 4, 0), 2), (2, 2, 0));
         // Matching the current counts is what makes the ioctl a
         // no-op.
-        assert_eq!(single_queue_counts(&channels_with(0, 0, 1)), (0, 0, 1));
-        assert_eq!(single_queue_counts(&channels_with(1, 1, 0)), (1, 1, 0));
+        assert_eq!(channel_counts(&channels_with(0, 0, 1), 1), (0, 0, 1));
+        assert_eq!(channel_counts(&channels_with(1, 1, 0), 1), (1, 1, 0));
     }
 
     #[test]

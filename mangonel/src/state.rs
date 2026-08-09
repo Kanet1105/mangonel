@@ -10,7 +10,7 @@ use std::{
 use mangonel_libxdp::{Binding, Umem, XdpError, bind, clear_interface};
 use mangonel_nic::nic::{self, Nic};
 
-use crate::worker;
+use crate::{config::Config, worker};
 
 /// The daemon's interface attachments.
 pub struct State {
@@ -98,6 +98,36 @@ impl State {
         // Attachment::drop stops and joins the workers off the
         // lock, so status calls need not wait on the join.
         drop(attachment);
+
+        Ok(())
+    }
+
+    /// Brings the router up from `config`: sets each data-
+    /// plane interface to `workers` queues (`ethtool -L`),
+    /// then attaches WAN and LAN. Re-appliable — it
+    /// detaches them first, so `run` doubles as reload.
+    ///
+    /// The workers currently receive-count-drop, so this
+    /// blackholes both interfaces; forwarding, and the
+    /// shared umem it needs, come later.
+    pub fn run(&self, config: &Config) -> Result<(), StateError> {
+        let interfaces = [&config.data_plane.wan, &config.data_plane.lan];
+
+        // Clean slate so run is a reload: ignore "not attached".
+        for interface in interfaces {
+            let _ = self.detach(interface);
+        }
+
+        // Queue count is a link-cycling ioctl and the socket
+        // refuses to bind while it shrinks a queue, so set it
+        // before attaching.
+        for interface in interfaces {
+            Nic::open(interface)?.set_queue_count(config.data_plane.workers)?;
+        }
+
+        for interface in interfaces {
+            self.attach(interface)?;
+        }
 
         Ok(())
     }
