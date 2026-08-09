@@ -8,5 +8,6 @@
 
 pub mod api;
 pub mod config;
+mod net;
 pub mod state;
 mod worker;

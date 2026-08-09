@@ -16,6 +16,21 @@ pub struct Config {
     pub data_plane: DataPlane,
     #[serde(default)]
     pub control: Control,
+    /// Absent means L2 transparent forwarding; present
+    /// turns on L3 routing.
+    pub routing: Option<Routing>,
+}
+
+/// The L3 routing table, as strings parsed when the router
+/// comes up.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Routing {
+    /// The directly-connected LAN prefix, e.g.
+    /// `192.168.1.0/24`.
+    pub lan_prefix: String,
+    /// The next hop for everything else, e.g.
+    /// `203.0.113.1`.
+    pub wan_gateway: String,
 }
 
 /// The interfaces the router runs on and how many workers
