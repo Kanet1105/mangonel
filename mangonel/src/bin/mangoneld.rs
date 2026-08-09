@@ -9,7 +9,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path, State as AxumState},
+    extract::State as AxumState,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -68,9 +68,6 @@ async fn main() {
         .route("/api/v1/status", get(status))
         .route("/api/v1/stats", get(stats))
         .route("/api/v1/interfaces", get(interfaces))
-        .route("/api/v1/interfaces/{interface}/attach", post(attach))
-        .route("/api/v1/interfaces/{interface}/detach", post(detach))
-        .route("/api/v1/interfaces/{interface}/clean", post(clean))
         .route("/api/v1/run", post(run))
         .route("/api/v1/shutdown", post(shutdown))
         .with_state(app.clone());
@@ -328,42 +325,6 @@ fn format_mac(mac: [u8; 6]) -> String {
     format!("{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}")
 }
 
-async fn attach(
-    AxumState(app): AxumState<App>,
-    Path(interface): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    let state = app.state.clone();
-    // bind() maps memory and loads an XDP program — seconds of
-    // blocking work — so it runs off the reactor thread.
-    spawn_state(move || state.attach(&interface)).await?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn detach(
-    AxumState(app): AxumState<App>,
-    Path(interface): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    let state = app.state.clone();
-    // Joins the interface's workers; off the reactor thread as
-    // above.
-    spawn_state(move || state.detach(&interface)).await?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn clean(
-    AxumState(app): AxumState<App>,
-    Path(interface): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    let state = app.state.clone();
-    // Detaches a leftover XDP program; off the reactor thread
-    // as the others.
-    spawn_state(move || state.clean(&interface)).await?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
 async fn run(AxumState(app): AxumState<App>) -> Result<StatusCode, ApiError> {
     let config = Config::load(&app.config_path)
         .map_err(|error| ApiError(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
@@ -432,9 +393,7 @@ struct ApiError(StatusCode, String);
 impl From<StateError> for ApiError {
     fn from(error: StateError) -> Self {
         let code = match &error {
-            StateError::AlreadyAttached(_) | StateError::AttachedCannotClean(_) => {
-                StatusCode::CONFLICT
-            }
+            StateError::AlreadyAttached(_) => StatusCode::CONFLICT,
             StateError::NotAttached(_) => StatusCode::NOT_FOUND,
             StateError::NoCores | StateError::Nic(_) | StateError::Xdp(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
