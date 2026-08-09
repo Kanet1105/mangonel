@@ -1,13 +1,14 @@
 use std::{
-    ffi::{CString, NulError},
+    ffi::{CString, NulError, c_int, c_long},
     io,
     ptr::{NonNull, null_mut},
 };
 
-use libc::{SOL_XDP, getsockopt};
+use libc::{SOL_XDP, getsockopt, if_nametoindex};
 use mangonel_libxdp_sys::{
-    XDP_OPTIONS, XDP_OPTIONS_ZEROCOPY, xdp_options, xsk_socket__create_shared, xsk_socket_config,
-    xsk_socket_config__bindgen_ty_1,
+    XDP_OPTIONS, XDP_OPTIONS_ZEROCOPY, libxdp_get_error, xdp_multiprog__close,
+    xdp_multiprog__detach, xdp_multiprog__get_from_ifindex, xdp_options, xsk_socket__create_shared,
+    xsk_socket_config, xsk_socket_config__bindgen_ty_1,
 };
 use mangonel_nic::nic::Nic;
 use rtrb::RingBuffer;
@@ -292,6 +293,55 @@ pub fn bind_with_umem(
     Ok(pairs)
 }
 
+/// Detaches every XDP program from `interface_name`,
+/// reverting it to the kernel; a no-op when none is
+/// attached. Recovers an interface a crashed daemon left
+/// with a dangling program — the sockets close on process
+/// death, but the XDP program does not.
+///
+/// # Panics
+///
+/// Never; failures are returned.
+pub fn clear_interface(interface_name: impl AsRef<str>) -> Result<(), XdpError> {
+    let interface_name = interface_name.as_ref();
+    let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
+
+    // Zero means the name resolves to no interface.
+    let index = unsafe { if_nametoindex(interface.as_ptr()) };
+    if index == 0 {
+        return Err(Error::UnknownInterface(interface_name.to_owned()).into());
+    }
+    let index =
+        c_int::try_from(index).map_err(|_| Error::UnknownInterface(interface_name.to_owned()))?;
+
+    // Nothing attached is reported two ways across libxdp
+    // versions: a null pointer, or an error pointer carrying
+    // -ENOENT. Both mean success with nothing to do; any other
+    // error pointer is a real failure, and must not be closed.
+    let multiprog = unsafe { xdp_multiprog__get_from_ifindex(index) };
+    if multiprog.is_null() {
+        return Ok(());
+    }
+    let error = unsafe { libxdp_get_error(multiprog.cast()) };
+    if error != 0 {
+        if error == -c_long::from(libc::ENOENT) {
+            return Ok(());
+        }
+        let code = i32::try_from(-error).unwrap_or(libc::EIO);
+
+        return Err(Error::ClearInterface(io::Error::from_raw_os_error(code)).into());
+    }
+
+    let detached = unsafe { xdp_multiprog__detach(multiprog) };
+    // Frees the handle whether or not the detach succeeded.
+    unsafe { xdp_multiprog__close(multiprog) };
+    if detached < 0 {
+        return Err(Error::ClearInterface(io::Error::from_raw_os_error(-detached)).into());
+    }
+
+    Ok(())
+}
+
 /// Zero flags: native attach and zero-copy where the driver
 /// supports them, with fallback. When forcing a mode,
 /// XDP_COPY/XDP_ZEROCOPY belong in bind_flags — never
@@ -378,6 +428,10 @@ enum Error {
     Setrlimit(io::Error),
     #[error("Interface name contains null character(s): {0}")]
     InvalidInterfaceName(NulError),
+    #[error("No interface named '{0}'.")]
+    UnknownInterface(String),
+    #[error("Failed to clear the interface's XDP program: {0}")]
+    ClearInterface(io::Error),
     #[error("Failed to query the interface: {0}")]
     Nic(mangonel_nic::nic::Error),
     #[error("The interface's queue count '{queue_count}' overflows the umem frame count.")]

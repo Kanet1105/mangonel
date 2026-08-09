@@ -43,6 +43,7 @@ async fn main() {
         .route("/api/v1/stats", get(stats))
         .route("/api/v1/interfaces/{interface}/attach", post(attach))
         .route("/api/v1/interfaces/{interface}/detach", post(detach))
+        .route("/api/v1/interfaces/{interface}/clean", post(clean))
         .route("/api/v1/shutdown", post(shutdown))
         .with_state(app.clone());
 
@@ -206,6 +207,18 @@ async fn detach(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn clean(
+    AxumState(app): AxumState<App>,
+    Path(interface): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let state = app.state.clone();
+    // Detaches a leftover XDP program; off the reactor thread
+    // as the others.
+    spawn_state(move || state.clean(&interface)).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn shutdown(AxumState(app): AxumState<App>) -> StatusCode {
     // Wakes the graceful-shutdown future; teardown runs in
     // main.
@@ -262,7 +275,9 @@ struct ApiError(StatusCode, String);
 impl From<StateError> for ApiError {
     fn from(error: StateError) -> Self {
         let code = match &error {
-            StateError::AlreadyAttached(_) => StatusCode::CONFLICT,
+            StateError::AlreadyAttached(_) | StateError::AttachedCannotClean(_) => {
+                StatusCode::CONFLICT
+            }
             StateError::NotAttached(_) => StatusCode::NOT_FOUND,
             StateError::NoCores | StateError::Xdp(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };

@@ -7,7 +7,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use mangonel_libxdp::{Umem, XdpError, bind};
+use mangonel_libxdp::{Umem, XdpError, bind, clear_interface};
 
 use crate::worker;
 
@@ -92,6 +92,21 @@ impl State {
         // Attachment::drop stops and joins the workers off the
         // lock, so status calls need not wait on the join.
         drop(attachment);
+
+        Ok(())
+    }
+
+    /// Removes a leftover XDP program from an interface
+    /// this daemon does not have attached — recovery
+    /// after a crash left one dangling. Refuses an
+    /// attached interface: detach it first, or this
+    /// would tear the program out from under its
+    /// running workers.
+    pub fn clean(&self, interface: &str) -> Result<(), StateError> {
+        if self.lock().contains_key(interface) {
+            return Err(StateError::AttachedCannotClean(interface.to_owned()));
+        }
+        clear_interface(interface)?;
 
         Ok(())
     }
@@ -181,6 +196,8 @@ pub enum StateError {
     AlreadyAttached(String),
     #[error("The interface '{0}' is not attached.")]
     NotAttached(String),
+    #[error("The interface '{0}' is attached; detach it before cleaning.")]
+    AttachedCannotClean(String),
     #[error("No cores are available for pinning.")]
     NoCores,
     #[error(transparent)]
