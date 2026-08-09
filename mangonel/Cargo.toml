@@ -5,6 +5,10 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
+mangonel-libxdp = { workspace = true }
+
+core_affinity = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
