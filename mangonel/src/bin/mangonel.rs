@@ -36,6 +36,9 @@ enum Command {
     Attach { interface: String },
     /// Detach an interface.
     Detach { interface: String },
+    /// Remove a leftover XDP program from an unattached
+    /// interface (crash recovery).
+    Clean { interface: String },
     /// Stop the daemon.
     Shutdown,
 }
@@ -95,6 +98,13 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                 &format!("/api/v1/interfaces/{interface}/detach"),
             )?;
             println!("detached {interface}");
+        }
+        Command::Clean { interface } => {
+            post(
+                &cli.socket,
+                &format!("/api/v1/interfaces/{interface}/clean"),
+            )?;
+            println!("cleaned {interface}");
         }
         Command::Shutdown => {
             post(&cli.socket, "/api/v1/shutdown")?;

@@ -120,6 +120,14 @@ fn attach_over_control_socket() {
     let received: u64 = stats.interfaces[0].queues.iter().sum();
     assert!(received > 0, "no packets counted on {LINK}");
 
+    // Clean is refused while attached: it would tear the XDP
+    // program out from under the workers.
+    assert_eq!(
+        request("POST", &format!("/interfaces/{LINK}/clean")).0,
+        409,
+        "clean of an attached interface must conflict"
+    );
+
     assert_eq!(
         request("POST", &format!("/interfaces/{LINK}/detach")).0,
         204
@@ -129,6 +137,10 @@ fn attach_over_control_socket() {
         404,
         "double detach must be not-found"
     );
+
+    // Detached: clean is now allowed, and a no-op success with
+    // nothing left attached.
+    assert_eq!(request("POST", &format!("/interfaces/{LINK}/clean")).0, 204);
 
     // Detach released the interface: it binds again.
     assert_eq!(
