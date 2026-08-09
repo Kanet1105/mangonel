@@ -1,9 +1,9 @@
 use std::ptr::NonNull;
 
 use mangonel_libxdp_sys::{
-    XSK_RING_PROD__DEFAULT_NUM_DESCS, xdp_desc, xsk_ring_cons, xsk_ring_cons__comp_addr,
-    xsk_ring_cons__peek, xsk_ring_cons__release, xsk_ring_cons__rx_desc, xsk_ring_prod,
-    xsk_ring_prod__fill_addr, xsk_ring_prod__reserve, xsk_ring_prod__submit,
+    XSK_RING_PROD__DEFAULT_NUM_DESCS, xdp_desc, xsk_prod_nb_free, xsk_ring_cons,
+    xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release, xsk_ring_cons__rx_desc,
+    xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve, xsk_ring_prod__submit,
     xsk_ring_prod__tx_desc,
 };
 
@@ -60,6 +60,17 @@ impl Producer {
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
+    /// Free slots in the ring, refreshing the cached
+    /// consumer index when fewer than `want` are cached.
+    /// May return more than `want`.
+    pub fn free(&self, want: u32) -> u32 {
+        unsafe { xsk_prod_nb_free(self.as_ptr(), want) }
+    }
+
+    /// All-or-nothing: grants `size` slots or none. Every
+    /// reserve moves the cached producer index at once and
+    /// must be matched by a submit of exactly the granted
+    /// count — submitting less desyncs the ring for good.
     pub fn reserve(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };

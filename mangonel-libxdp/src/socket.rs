@@ -57,10 +57,15 @@ impl XdpSender {
             }
         }
         let tx_ring = self.socket.tx_ring();
-        let (tx_available, tx_index) = tx_ring.reserve(transmit_count);
-        // reserve is all-or-nothing; consumption stops at the
-        // first transmit without a slot, keeping the
-        // consumed front contiguous for retry-with-tail.
+        // Clamped to the ring's free space for the same reason as
+        // in fill: an unclamped all-or-nothing reserve makes
+        // no progress at all until the ring can seat the
+        // whole batch.
+        let request = transmit_count.min(tx_ring.free(transmit_count));
+        let (tx_available, tx_index) = tx_ring.reserve(request);
+        // Consumption stops at the first transmit without a slot,
+        // keeping the consumed front contiguous for
+        // retry-with-tail.
         let mut written: u32 = 0;
         let mut consumed: u32 = 0;
         for descriptor in &mut buffer[..size as usize] {
@@ -169,10 +174,17 @@ impl XdpReceiver {
     }
 
     fn fill(&mut self) {
+        let fill_ring = self.socket.fill_ring();
         let size = u32::try_from(self.desc_consumer.slots())
             .expect("XdpDescriptor consumer slots overflow u32. This is a bug.")
-            .min(self.socket.fill_ring().size());
-        let fill_ring = self.socket.fill_ring();
+            .min(fill_ring.size());
+        // Clamp to the ring's free space: reserve is
+        // all-or-nothing, so an unclamped request sized to
+        // the full ring succeeds only once the kernel has
+        // drained it completely, starving RX in bursts meanwhile.
+        // The kernel only consumes fill entries, so the
+        // space cannot shrink between these two calls.
+        let size = size.min(fill_ring.free(size));
         let (available, index) = fill_ring.reserve(size);
         let mut offset: u32 = 0;
         while offset < available {
