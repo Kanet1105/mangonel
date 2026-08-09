@@ -9,7 +9,8 @@ mangonel-libxdp-sys = { workspace = true }
 mangonel-nic = { workspace = true }
 
 libc = { workspace = true }
-thiserror = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+tracing = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

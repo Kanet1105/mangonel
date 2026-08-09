@@ -16,15 +16,19 @@ mangonel-libxdp = { path = "mangonel-libxdp" }
 mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
 mangonel-nic = { path = "mangonel-nic" }
 
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
-clap = { version = "4.6", features = ["derive"] }
-core_affinity = "0.8"
-libc = "0.2"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
-tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "signal"] }
-toml = "0.9"
+# default-features = false throughout; each crate turns on the
+# features it needs.
+axum = { version = "0.8", default-features = false }
+clap = { version = "4.6", default-features = false }
+core_affinity = { version = "0.8", default-features = false }
+libc = { version = "0.2", default-features = false }
+serde = { version = "1.0", default-features = false }
+serde_json = { version = "1.0", default-features = false }
+thiserror = { version = "2.0", default-features = false }
+tokio = { version = "1", default-features = false }
+toml = { version = "0.9", default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false }
 
 # Numeric conversions in these crates cross kernel ABI widths (u32 ring
 # indices, u64 umem addresses, usize lengths), so every lossy or

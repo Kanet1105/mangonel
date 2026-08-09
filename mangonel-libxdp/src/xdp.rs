@@ -367,9 +367,9 @@ fn is_zero_copy(fd: i32) -> bool {
 fn warn_copy_mode(interface_name: &str, fd: i32) -> bool {
     let zero_copy = is_zero_copy(fd);
     if !zero_copy {
-        eprintln!(
-            "mangonel-libxdp: {interface_name}: driver lacks zero-copy support; running in copy \
-             mode."
+        tracing::warn!(
+            interface = interface_name,
+            "driver lacks zero-copy support; running in copy mode"
         );
     }
 
