@@ -17,7 +17,10 @@ use mangonel_libxdp_sys::{
     xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
 };
 
-use crate::ring::{Consumer, Producer};
+use crate::{
+    pool::FramePool,
+    ring::{Consumer, Producer},
+};
 
 // Also the minimum frame size.
 pub const DEFAULT_FRAME_SIZE: u32 = XSK_UMEM__DEFAULT_FRAME_SIZE;
@@ -46,14 +49,37 @@ pub struct Umem {
     inner: Arc<UmemInner>,
 }
 
+struct UmemInner {
+    umem: NonNull<xsk_umem>,
+    area: UmemArea,
+    config: xsk_umem_config,
+    id: usize,
+    /// Every socket on this umem shares this pool: a frame
+    /// received on one socket and transmitted on another
+    /// completes back into the same pool.
+    pool: FramePool,
+}
+
+impl Drop for UmemInner {
+    fn drop(&mut self) {
+        let value = unsafe { xsk_umem__delete(self.umem.as_ptr()) };
+        if value.is_negative() {
+            panic!(
+                "Failed to free Umem: {}",
+                io::Error::from_raw_os_error(-value)
+            );
+        }
+    }
+}
+
 // SAFETY: The region is process-wide memory with a stable
 // address for the lifetime of the Umem.
 unsafe impl Send for Umem {}
 
-// SAFETY: Umem holds no mutable state after creation — the
-// rings belong to the sockets. Which frames a thread may
-// touch is governed by XdpDescriptor's mint rule, not by
-// this type.
+// SAFETY: The rings belong to the sockets; the only mutable
+// state after creation is the pool, which synchronizes
+// itself. Which frames a thread may touch is governed by
+// XdpDescriptor's mint rule, not by this type.
 unsafe impl Sync for Umem {}
 
 impl Clone for Umem {
@@ -131,6 +157,28 @@ impl Umem {
             "xsk_umem__create left a ring unpopulated. This is a bug."
         );
 
+        // Every frame starts in the pool. The capacity rounds up
+        // to the pool's power-of-two requirement — usually a
+        // no-op, as frame counts are already powers of two.
+        // Returning frames always has room even without
+        // headroom: a frame leaving the datapath holds no pool
+        // slot, so free slots always cover in-flight frames.
+        let pool = FramePool::new((frame_count as usize).next_power_of_two());
+        let (available, index) = pool
+            .claim_write(frame_count)
+            .expect("Seeding an empty pool cannot fail. This is a bug.");
+        assert!(
+            available == frame_count,
+            "Seeding claimed fewer frames than the pool was sized for. This is a bug."
+        );
+        for frame in 0..frame_count {
+            pool.write_at(
+                index.wrapping_add(frame) as usize,
+                u64::from(frame) * u64::from(frame_size),
+            );
+        }
+        pool.commit_write(index as usize, available);
+
         let umem = Self {
             inner: UmemInner {
                 umem: NonNull::new(umem_ptr)
@@ -138,11 +186,18 @@ impl Umem {
                 area: umem_area,
                 config: umem_config,
                 id: NEXT_UMEM_ID.fetch_add(1, Ordering::Relaxed),
+                pool,
             }
             .into(),
         };
 
         Ok(umem)
+    }
+
+    /// The shared pool every socket on this umem draws free
+    /// frames from and completes them back into.
+    pub fn pool(&self) -> &FramePool {
+        &self.inner.pool
     }
 
     /// Process-unique id carried by every `XdpDescriptor`
@@ -166,25 +221,6 @@ impl Umem {
         }
 
         Some(unsafe { xsk_umem__get_data(self.inner.area.address.as_ptr(), address) })
-    }
-}
-
-struct UmemInner {
-    umem: NonNull<xsk_umem>,
-    area: UmemArea,
-    config: xsk_umem_config,
-    id: usize,
-}
-
-impl Drop for UmemInner {
-    fn drop(&mut self) {
-        let value = unsafe { xsk_umem__delete(self.umem.as_ptr()) };
-        if value.is_negative() {
-            panic!(
-                "Failed to free Umem: {}",
-                io::Error::from_raw_os_error(-value)
-            );
-        }
     }
 }
 

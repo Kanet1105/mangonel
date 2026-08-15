@@ -68,10 +68,12 @@ impl Producer {
     }
 
     /// All-or-nothing: grants `size` slots or none. Every
-    /// reserve moves the cached producer index at once and
-    /// must be matched by a submit of exactly the granted
-    /// count — submitting less desyncs the ring for good.
-    pub fn reserve(&self, size: u32) -> (u32, u32) {
+    /// claim moves the cached producer index at once and
+    /// must be matched by a commit of exactly the granted
+    /// count — committing less desyncs the ring for good.
+    ///
+    /// Wraps `xsk_ring_prod__reserve`.
+    pub fn claim(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
 
@@ -82,10 +84,10 @@ impl Producer {
     /// value, not `&mut` into the ring: two calls with
     /// aliasing indices would otherwise yield aliasing
     /// `&mut`.
-    pub fn set_descriptor(&self, index: u32, address: u64, length: u32) {
+    pub fn write_descriptor(&self, index: u32, address: u64, length: u32) {
         // SAFETY: The ring is registered; the index is masked into
         // range, and the slot is owned by this producer
-        // between reserve and submit. No reference outlives
+        // between claim and commit. No reference outlives
         // the call.
         unsafe {
             let slot = xsk_ring_prod__tx_desc(self.as_ptr(), index);
@@ -98,13 +100,16 @@ impl Producer {
     }
 
     /// Writes a fill-ring address into the slot at `index`.
-    /// Same contract as [`Self::set_descriptor`].
-    pub fn set_fill_address(&self, index: u32, address: u64) {
+    /// Same contract as [`Self::write_descriptor`].
+    pub fn write_fill_address(&self, index: u32, address: u64) {
         // SAFETY: As above, for the fill ring.
         unsafe { *xsk_ring_prod__fill_addr(self.as_ptr(), index) = address }
     }
 
-    pub fn submit(&self, offset: u32) {
+    /// Publishes the claimed slots to the consumer side.
+    ///
+    /// Wraps `xsk_ring_prod__submit`.
+    pub fn commit(&self, offset: u32) {
         unsafe { xsk_ring_prod__submit(self.as_ptr(), offset) };
     }
 }
@@ -137,7 +142,13 @@ impl Consumer {
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
-    pub fn peek(&self, size: u32) -> (u32, u32) {
+    /// Up to `size`: grants the filled run and advances the
+    /// cached consumer index — a claim, not a look; two
+    /// claims return different windows. Every claim must be
+    /// matched by a commit of exactly the granted count.
+    ///
+    /// Wraps `xsk_ring_cons__peek`.
+    pub fn claim(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
 
@@ -145,21 +156,24 @@ impl Consumer {
     }
 
     /// Copies the slot out: the kernel may rewrite it as
-    /// soon as `release` hands it back.
-    pub fn descriptor(&self, index: u32) -> xdp_desc {
+    /// soon as `commit` hands it back.
+    pub fn read_descriptor(&self, index: u32) -> xdp_desc {
         // SAFETY: The ring is registered and the index is masked
-        // into range; an index beyond what peek reported
+        // into range; an index beyond what claim reported
         // reads stale data, which is a bug but not unsound.
         unsafe { xsk_ring_cons__rx_desc(self.as_ptr(), index).read() }
     }
 
-    /// Copies the address out; as [`Self::descriptor`].
-    pub fn completion_address(&self, index: u32) -> u64 {
+    /// Copies the address out; as [`Self::read_descriptor`].
+    pub fn read_completion_address(&self, index: u32) -> u64 {
         // SAFETY: As above, for the completion ring.
         unsafe { xsk_ring_cons__comp_addr(self.as_ptr(), index).read() }
     }
 
-    pub fn release(&self, offset: u32) {
+    /// Hands the claimed slots back to the kernel side.
+    ///
+    /// Wraps `xsk_ring_cons__release`.
+    pub fn commit(&self, offset: u32) {
         unsafe { xsk_ring_cons__release(self.as_ptr(), offset) };
     }
 }
