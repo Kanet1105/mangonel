@@ -12,8 +12,9 @@ use mangonel_libxdp_sys::{
 use mangonel_nic::nic::Nic;
 
 use crate::{
+    pool::FramePool,
     ring::{Consumer, DEFAULT_RING_SIZE, Producer, RingError, ring_buffer},
-    socket::{FramePool, XdpSocket},
+    socket::XdpSocket,
     umem::{DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, Umem, UmemError},
 };
 
@@ -21,18 +22,17 @@ use crate::{
 /// completion.
 const RINGS_PER_SOCKET: u32 = 4;
 
-/// What [`bind`] returns: one [`XdpSocket`] per queue, one
-/// seeded [`FramePool`] per queue, the umem backing them,
-/// and whether the kernel bound zero-copy.
+/// What [`bind`] returns: one [`XdpSocket`] per queue, the
+/// umem backing them, and whether the kernel bound
+/// zero-copy.
 ///
-/// `pools[i]` holds queue `i`'s share of the umem's frames.
-/// It is the worker's pool: a socket added over the same
-/// umem with [`bind_with_umem`] shares it, so a frame
-/// forwarded between the two interfaces returns to the pool
+/// The umem carries the seeded frame pool: every socket on
+/// it — including ones added with [`bind_with_umem`] —
+/// draws from and completes back into the same pool, so a
+/// frame forwarded between interfaces returns to the pool
 /// it left.
 pub struct Binding {
     pub sockets: Vec<XdpSocket>,
-    pub pools: Vec<FramePool>,
     pub umem: Umem,
     pub zero_copy: bool,
 }
@@ -96,7 +96,7 @@ pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Bin
         .collect::<Result<Vec<_>, RingError>>()?;
 
     // Sized for every ring of every queue of every sharing
-    // interface being full at once, so the pools never starve.
+    // interface being full at once, so the pool never starves.
     let frame_count = DEFAULT_RING_SIZE
         .checked_mul(RINGS_PER_SOCKET)
         .and_then(|frames| frames.checked_mul(queue_count))
@@ -121,11 +121,7 @@ pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Bin
     let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config();
 
-    // Every frame lives in some pool: one pool per queue, each
-    // its own disjoint slice of the umem.
-    let frames_per_pool = frame_count / queue_count;
     let mut sockets = Vec::with_capacity(queue_count as usize);
-    let mut pools = Vec::with_capacity(queue_count as usize);
     // Set from queue 0; every queue on an interface binds in
     // the same mode.
     let mut zero_copy = false;
@@ -197,20 +193,11 @@ pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Bin
             zero_copy = warn_copy_mode(interface_name, socket.socket_fd());
         }
 
-        // This queue's disjoint slice of the umem's frames.
-        let mut pool = FramePool::new(frames_per_pool as usize);
-        for index in 0..frames_per_pool {
-            let frame = u64::from(queue_id * frames_per_pool + index);
-            pool.push(frame * u64::from(DEFAULT_FRAME_SIZE));
-        }
-
         sockets.push(socket);
-        pools.push(pool);
     }
 
     Ok(Binding {
         sockets,
-        pools,
         umem,
         zero_copy,
     })
@@ -222,10 +209,10 @@ pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Bin
 /// no copy. Binds with `XDP_SHARED_UMEM`, inheriting the
 /// first bind's copy mode.
 ///
-/// Brings no pools: these sockets share the per-queue pools
-/// from the [`bind`] that created the umem — which is what
-/// makes forwarding sound. Size that umem for both
-/// interfaces via `bind`'s `umem_interfaces`.
+/// These sockets share the umem's frame pool with the
+/// [`bind`] that created it — which is what makes
+/// forwarding sound. Size that umem for both interfaces
+/// via `bind`'s `umem_interfaces`.
 ///
 /// # Panics
 ///

@@ -5,12 +5,14 @@
 //! that establishes them.
 
 mod descriptor;
+mod pool;
 mod ring;
 mod socket;
 mod umem;
 mod xdp;
 
 pub use descriptor::XdpDescriptor;
-pub use socket::{FramePool, XdpSocket};
+pub use pool::FramePool;
+pub use socket::XdpSocket;
 pub use umem::Umem;
 pub use xdp::{Binding, XdpError, bind, bind_with_umem};
