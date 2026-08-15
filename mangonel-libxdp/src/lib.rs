@@ -12,7 +12,6 @@ mod umem;
 mod xdp;
 
 pub use descriptor::XdpDescriptor;
-pub use pool::FramePool;
 pub use socket::XdpSocket;
 pub use umem::Umem;
 pub use xdp::{Binding, XdpError, bind, bind_with_umem};

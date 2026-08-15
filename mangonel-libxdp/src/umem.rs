@@ -194,10 +194,12 @@ impl Umem {
         Ok(umem)
     }
 
-    /// The shared pool every socket on this umem draws free
-    /// frames from and completes them back into.
-    pub fn pool(&self) -> &FramePool {
-        &self.inner.pool
+    pub(crate) fn as_ptr(&self) -> *mut xsk_umem {
+        self.inner.umem.as_ptr()
+    }
+
+    pub(crate) fn config(&self) -> &xsk_umem_config {
+        &self.inner.config
     }
 
     /// Process-unique id carried by every `XdpDescriptor`
@@ -206,12 +208,11 @@ impl Umem {
         self.inner.id
     }
 
-    pub(crate) fn as_ptr(&self) -> *mut xsk_umem {
-        self.inner.umem.as_ptr()
-    }
-
-    pub(crate) fn config(&self) -> &xsk_umem_config {
-        &self.inner.config
+    /// The shared pool every socket on this umem draws free
+    /// frames from and completes them back into. Crate-only:
+    /// the claim/commit contract stays behind the socket API.
+    pub(crate) fn pool(&self) -> &FramePool {
+        &self.inner.pool
     }
 
     pub(crate) fn get_data(&self, address: u64, length: usize) -> Option<*mut c_void> {
