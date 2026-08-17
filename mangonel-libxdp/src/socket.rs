@@ -23,8 +23,8 @@ use crate::{
 /// umem's pool is the shared piece.
 pub struct XdpSocket {
     socket: NonNull<xsk_socket>,
-    tx_ring: Producer,
     rx_ring: Consumer,
+    tx_ring: Producer,
     fill_ring: Producer,
     completion_ring: Consumer,
     /// Held so the umem cannot be freed first.
@@ -37,11 +37,23 @@ pub struct XdpSocket {
 // single driver.
 unsafe impl Send for XdpSocket {}
 
+impl Drop for XdpSocket {
+    fn drop(&mut self) {
+        // Runs before the `umem` field drops, so socket delete
+        // precedes umem delete. The umem's other references —
+        // the binding's clone and the other sockets' — keep
+        // it alive until the last socket is gone, so every
+        // xsk_socket__delete precedes the single
+        // xsk_umem__delete.
+        unsafe { xsk_socket__delete(self.socket.as_ptr()) }
+    }
+}
+
 impl XdpSocket {
     pub(crate) fn new(
         socket: NonNull<xsk_socket>,
-        tx_ring: Producer,
         rx_ring: Consumer,
+        tx_ring: Producer,
         fill_ring: Producer,
         completion_ring: Consumer,
         umem: Umem,
@@ -68,8 +80,9 @@ impl XdpSocket {
     /// from the umem's pool first.
     ///
     /// Overwriting a slot that still holds a minted
-    /// descriptor leaks its frame, so reuse slots only
-    /// after [`Self::send`] has consumed them.
+    /// descriptor leaks its frame, so consume slots — via
+    /// [`Self::send`] or [`XdpDescriptor::drop`] — before
+    /// reusing them.
     #[must_use = "the count says how many descriptors were filled with received frames"]
     pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
@@ -77,7 +90,6 @@ impl XdpSocket {
             .min(self.rx_ring.size());
         self.fill();
         self.poll();
-        let umem_id = self.umem.id();
         let (available, index) = self.rx_ring.claim(size);
         let mut offset: u32 = 0;
         while offset < available {
@@ -88,8 +100,7 @@ impl XdpSocket {
             buffer[offset as usize] = XdpDescriptor {
                 address: descriptor.addr,
                 length: descriptor.len,
-                umem_id,
-                is_drop: false,
+                umem: Some(self.umem.clone()),
             };
             offset += 1;
         }
@@ -98,19 +109,22 @@ impl XdpSocket {
         offset
     }
 
-    /// Consumes the minted descriptors at the front of
-    /// `buffer`: drop-marked ones return to the umem's
-    /// pool, the rest queue for transmit. Returns how many
-    /// were consumed; retry with the unconsumed tail —
-    /// resending the whole buffer panics on the
-    /// consumed front.
+    /// Consumes the front of `buffer`, queueing its live
+    /// descriptors for transmit; empty slots — frames
+    /// already dropped or consumed — pass through for
+    /// free. Returns how many slots were consumed; retry
+    /// with the unconsumed tail.
+    ///
+    /// To drop a frame instead of transmitting it, take it
+    /// from its slot and call [`XdpDescriptor::drop`]
+    /// before calling: send passes the emptied slot
+    /// through.
     ///
     /// # Panics
     ///
-    /// Panics when a descriptor in the batch is empty or
-    /// from a different umem. Validated before the ring
-    /// is touched, so the ring is never left
-    /// half-claimed.
+    /// Panics when a descriptor in the batch was minted
+    /// against a different umem. Validated before the ring
+    /// is touched, so the ring is never left half-claimed.
     #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
     pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
@@ -121,12 +135,12 @@ impl XdpSocket {
         let umem_id = self.umem.id();
         let mut transmit_count: u32 = 0;
         for descriptor in &buffer[..size as usize] {
-            assert!(
-                descriptor.umem_id == umem_id,
-                "Sent a XdpDescriptor that is not backed by this socket's umem: it is empty \
-                 (already consumed, or never minted) or was minted against a different umem."
-            );
-            if !descriptor.is_drop {
+            if let Some(umem) = &descriptor.umem {
+                assert!(
+                    umem.id() == umem_id,
+                    "Sent a XdpDescriptor that was minted against a different umem: its \
+                     address indexes the wrong memory."
+                );
                 transmit_count += 1;
             }
         }
@@ -135,54 +149,30 @@ impl XdpSocket {
         // ring can seat the whole batch.
         let request = transmit_count.min(self.tx_ring.free(transmit_count));
         let (tx_available, tx_index) = self.tx_ring.claim(request);
-        // Walk the consumed front first: it stops at the first
-        // transmit without a tx slot, keeping it contiguous for
-        // retry-with-tail, and its drop count sizes one pool
-        // grant instead of a commit per drop.
+        // Consumption stops at the first live descriptor
+        // without a tx slot, keeping the consumed front
+        // contiguous for retry-with-tail.
         let mut written: u32 = 0;
         let mut consumed: u32 = 0;
-        let mut drop_count: u32 = 0;
-        for descriptor in &buffer[..size as usize] {
-            if descriptor.is_drop {
-                drop_count += 1;
-            } else {
+        for descriptor in &mut buffer[..size as usize] {
+            if descriptor.umem.is_some() {
                 if written == tx_available {
                     break;
                 }
-                written += 1;
-            }
-            consumed += 1;
-        }
-        let pool = self.umem.pool();
-        let pool_index = (drop_count > 0).then(|| Self::pool_claim_write(pool, drop_count));
-
-        let mut written: u32 = 0;
-        let mut dropped: u32 = 0;
-        for descriptor in &mut buffer[..consumed as usize] {
-            if descriptor.is_drop {
-                let pool_index =
-                    pool_index.expect("A drop was counted, so the grant exists. This is a bug.");
-                pool.write_at(
-                    pool_index.wrapping_add(dropped) as usize,
-                    descriptor.address,
-                );
-                dropped += 1;
-            } else {
                 self.tx_ring.write_descriptor(
                     tx_index.wrapping_add(written),
                     descriptor.address,
                     descriptor.length,
                 );
                 written += 1;
+                // Ownership of the frame moved to the tx ring; the
+                // emptied descriptor is the proof this handle can
+                // no longer reach it.
+                descriptor.defuse();
             }
-            // An empty descriptor is the proof this handle can no
-            // longer reach the frame.
-            *descriptor = XdpDescriptor::default();
+            consumed += 1;
         }
         self.tx_ring.commit(written);
-        if let Some(pool_index) = pool_index {
-            pool.commit_write(pool_index as usize, drop_count);
-        }
         self.kick();
         // Drain every completion available, not just this batch's
         // worth; nothing else returns frames to the pool.
@@ -285,17 +275,5 @@ impl XdpSocket {
 
     pub(crate) fn socket_fd(&self) -> i32 {
         unsafe { xsk_socket__fd(self.socket.as_ptr()) }
-    }
-}
-
-impl Drop for XdpSocket {
-    fn drop(&mut self) {
-        // Runs before the `umem` field drops, so socket delete
-        // precedes umem delete. The umem's other references —
-        // the binding's clone and the other sockets' — keep
-        // it alive until the last socket is gone, so every
-        // xsk_socket__delete precedes the single
-        // xsk_umem__delete.
-        unsafe { xsk_socket__delete(self.socket.as_ptr()) }
     }
 }
