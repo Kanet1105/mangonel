@@ -67,7 +67,7 @@ impl FramePool {
     }
 
     /// Truncation matches the cursors' `u32` wrap.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     fn position(index: usize) -> u32 {
         index as u32
     }

@@ -94,9 +94,18 @@ impl XdpSocket {
         self.fill();
         self.poll();
         let (available, index) = self.rx_ring.claim(size);
+        // Frames are power-of-two sized.
+        let frame_mask = u64::from(self.umem.config().frame_size - 1);
         let mut offset: u32 = 0;
         while offset < available {
             let descriptor = self.rx_ring.read_descriptor(index.wrapping_add(offset));
+            // The one kernel input the slice accessors trust:
+            // a packet crossing its frame boundary would alias
+            // other descriptors' frames.
+            assert!(
+                (descriptor.addr & frame_mask) + u64::from(descriptor.len) <= frame_mask + 1,
+                "The kernel returned an rx descriptor crossing its frame boundary. This is a bug."
+            );
             buffer[offset as usize] = XdpDescriptor {
                 address: descriptor.addr,
                 length: descriptor.len,
