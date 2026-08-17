@@ -2,12 +2,36 @@
 # /etc/mangonel/config.toml (or point mangoneld --config at it).
 # The daemon reads it at startup and re-reads it on `run`.
 
-[data_plane]
-wan = "enp1s0f0"
-lan = "enp1s0f1"
 # Queues set on each interface (ethtool -L) and, with one
 # worker per queue, the worker count.
 workers = 4
+
+# The egress interface and how it gets its address: pick
+# exactly one mode block. Only `interface` is applied today;
+# the mode awaits the tunnel data plane.
+[wan]
+interface = "enp1s0f0"
+mode = "dhcp"
+
+# [wan]
+# interface = "enp1s0f0"
+# mode = "pppoe"
+# username = "user@isp"
+# password = "secret"
+
+# [wan]
+# interface = "enp1s0f0"
+# mode = "static"
+# address = "203.0.113.7/24"
+# gateway = "203.0.113.1"
+
+# The tunnel side clients connect to. Only `interface` is
+# applied today.
+[lan]
+interface = "enp1s0f1"
+address = "192.168.100.1/24"    # tunnel-facing address
+port = 51821                    # UDP tunnel listener
+inner_prefix = "10.99.0.0/16"   # client inner addresses
 
 [control]
 # The Unix control socket. Always on; filesystem permissions
@@ -22,10 +46,7 @@ tcp = "127.0.0.1:8080"
 # Optional. With [routing] the workers route at L3 — parse,
 # decrement TTL, rewrite MACs — learning next-hop MACs from
 # traffic and dropping unresolved ones. Without it, WAN and LAN
-# are bridged unchanged (L2). Next-hop MACs are learned, so a
-# gateway that never sources traffic (only forwards) is not
-# resolved until it is seen; the router does not yet answer ARP
-# for its own addresses.
+# are bridged unchanged (L2).
 # [routing]
 # lan_prefix = "192.168.1.0/24"   # directly connected
 # wan_gateway = "203.0.113.1"     # next hop for everything else

@@ -13,12 +13,63 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/mangonel/config.toml";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub data_plane: DataPlane,
+    /// Queues to set on each interface (`ethtool -L`) and,
+    /// with one worker per queue, the worker count.
+    #[serde(default = "default_workers")]
+    pub workers: u32,
+    pub wan: Wan,
+    pub lan: Lan,
     #[serde(default)]
     pub control: Control,
     /// Absent means L2 transparent forwarding; present
     /// turns on L3 routing.
     pub routing: Option<Routing>,
+}
+
+/// WAN provisioning: how the egress interface gets its
+/// address. Only `interface` is applied today; the mode
+/// awaits the tunnel data plane.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Wan {
+    pub interface: String,
+    #[serde(flatten)]
+    pub mode: WanMode,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum WanMode {
+    Dhcp,
+    Pppoe(WanPppoe),
+    Static(WanStatic),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WanPppoe {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WanStatic {
+    /// CIDR, e.g. `203.0.113.7/24`.
+    pub address: String,
+    pub gateway: String,
+}
+
+/// The tunnel side: where clients' encapsulated traffic
+/// arrives and inner addresses come from. Only
+/// `interface` is applied today.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Lan {
+    pub interface: String,
+    /// The node's tunnel-facing address, CIDR.
+    pub address: String,
+    /// UDP port the tunnel listener binds.
+    pub port: u16,
+    /// Client inner addresses come from this prefix, e.g.
+    /// `10.99.0.0/16`.
+    pub inner_prefix: String,
 }
 
 /// The L3 routing table, as strings parsed when the router
@@ -31,18 +82,6 @@ pub struct Routing {
     /// The next hop for everything else, e.g.
     /// `203.0.113.1`.
     pub wan_gateway: String,
-}
-
-/// The interfaces the router runs on and how many workers
-/// each gets.
-#[derive(Debug, Clone, Deserialize)]
-pub struct DataPlane {
-    pub wan: String,
-    pub lan: String,
-    /// Queues to set on each interface (`ethtool -L`) and,
-    /// with one worker per queue, the worker count.
-    #[serde(default = "default_workers")]
-    pub workers: u32,
 }
 
 /// Where the control API listens. The UDS is always on; the
@@ -91,4 +130,68 @@ pub enum ConfigError {
     Read(String, std::io::Error),
     #[error("Failed to parse the config at {0}: {1}")]
     Parse(String, toml::de::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wan_dhcp() {
+        let wan: Wan = toml::from_str("interface = \"eth0\"\nmode = \"dhcp\"").unwrap();
+        assert!(matches!(wan.mode, WanMode::Dhcp));
+    }
+
+    #[test]
+    fn wan_pppoe() {
+        let wan: Wan = toml::from_str(
+            "interface = \"eth0\"\nmode = \"pppoe\"\nusername = \"user\"\npassword = \"secret\"",
+        )
+        .unwrap();
+        let WanMode::Pppoe(pppoe) = wan.mode else {
+            panic!("expected pppoe");
+        };
+        assert_eq!(
+            (pppoe.username.as_str(), pppoe.password.as_str()),
+            ("user", "secret")
+        );
+    }
+
+    #[test]
+    fn wan_static() {
+        let wan: Wan = toml::from_str(
+            "interface = \"eth0\"\nmode = \"static\"\naddress = \"203.0.113.7/24\"\ngateway = \"203.0.113.1\"",
+        )
+        .unwrap();
+        let WanMode::Static(fixed) = wan.mode else {
+            panic!("expected static");
+        };
+        assert_eq!(fixed.address, "203.0.113.7/24");
+        assert_eq!(fixed.gateway, "203.0.113.1");
+    }
+
+    #[test]
+    fn wan_rejects_unknown_mode() {
+        assert!(toml::from_str::<Wan>("interface = \"eth0\"\nmode = \"bridge\"").is_err());
+    }
+
+    #[test]
+    fn lan() {
+        let lan: Lan = toml::from_str(
+            "interface = \"eth1\"\naddress = \"192.168.100.1/24\"\nport = 51821\ninner_prefix = \"10.99.0.0/16\"",
+        )
+        .unwrap();
+        assert_eq!(lan.port, 51821);
+        assert_eq!(lan.inner_prefix, "10.99.0.0/16");
+    }
+
+    #[test]
+    fn minimal_config() {
+        let config: Config = toml::from_str(
+            "[wan]\ninterface = \"eth0\"\nmode = \"dhcp\"\n\n[lan]\ninterface = \"eth1\"\naddress = \"192.168.100.1/24\"\nport = 51821\ninner_prefix = \"10.99.0.0/16\"",
+        )
+        .unwrap();
+        assert_eq!(config.workers, 1);
+        assert!(config.routing.is_none());
+    }
 }
