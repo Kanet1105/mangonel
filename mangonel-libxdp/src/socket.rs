@@ -13,16 +13,9 @@ use crate::{
 };
 
 /// One bound AF_XDP queue: receive and transmit over its
-/// four rings, drawing free frames from — and returning
-/// them to — its umem's shared [`FramePool`]. Sockets on
-/// one umem sharing one pool is what makes forwarding
-/// sound — a frame received on one socket and transmitted
-/// on another completes back into the same pool, so no
-/// per-socket pool can starve under asymmetric traffic.
-///
-/// Not `Clone` and not `Sync`: one worker thread owns the
-/// socket, so the rings have exactly one driver. The
-/// umem's pool is the shared piece.
+/// four rings, recycling frames through the umem's shared
+/// [`FramePool`]. Not `Clone` and not `Sync`: one worker
+/// thread owns the socket, so each ring has one driver.
 pub struct XdpSocket {
     socket: NonNull<xsk_socket>,
     rx_ring: Consumer,
@@ -33,20 +26,14 @@ pub struct XdpSocket {
     umem: Umem,
 }
 
-// SAFETY: moved to its worker thread at spawn. A raw socket
-// pointer and rings, none with thread affinity. Never
-// shared — not `Sync`, not `Clone` — so each ring has a
-// single driver.
+// SAFETY: A raw socket pointer and rings, none with thread
+// affinity; never shared, so each ring has a single driver.
 unsafe impl Send for XdpSocket {}
 
 impl Drop for XdpSocket {
     fn drop(&mut self) {
-        // Runs before the `umem` field drops, so socket delete
-        // precedes umem delete. The umem's other references —
-        // the binding's clone and the other sockets' — keep
-        // it alive until the last socket is gone, so every
-        // xsk_socket__delete precedes the single
-        // xsk_umem__delete.
+        // Runs before the `umem` field drops, so every
+        // xsk_socket__delete precedes the xsk_umem__delete.
         unsafe { xsk_socket__delete(self.socket.as_ptr()) }
     }
 }
@@ -96,14 +83,9 @@ impl XdpSocket {
     }
 
     /// Fills the front of `buffer` with one minted
-    /// descriptor per received frame, overwriting the
-    /// slots; returns the count. Tops the fill ring up
-    /// from the umem's pool first.
-    ///
-    /// Overwriting a slot that still holds a minted
-    /// descriptor leaks its frame, so consume slots — via
-    /// [`Self::send`] or [`XdpDescriptor::drop`] — before
-    /// reusing them.
+    /// descriptor per received frame; returns the count.
+    /// Overwriting a slot that still holds a live
+    /// descriptor leaks its frame — consume slots first.
     #[must_use = "the count says how many descriptors were filled with received frames"]
     pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
@@ -115,9 +97,6 @@ impl XdpSocket {
         let mut offset: u32 = 0;
         while offset < available {
             let descriptor = self.rx_ring.read_descriptor(index.wrapping_add(offset));
-            // Minted: the sole handle to the frame until send
-            // consumes it — what as_slice_mut's exclusivity
-            // rests on.
             buffer[offset as usize] = XdpDescriptor {
                 address: descriptor.addr,
                 length: descriptor.len,
@@ -130,29 +109,18 @@ impl XdpSocket {
         offset
     }
 
-    /// Consumes the front of `buffer`, queueing its live
-    /// descriptors for transmit; empty slots — frames
-    /// already dropped or consumed — pass through for
-    /// free. Returns how many slots were consumed; retry
-    /// with the unconsumed tail.
-    ///
-    /// To drop a frame instead of transmitting it, take it
-    /// from its slot and call [`XdpDescriptor::drop`]
-    /// before calling: send passes the emptied slot
-    /// through.
-    ///
-    /// # Panics
-    ///
-    /// Panics when a descriptor in the batch was minted
-    /// against a different umem. Validated before the ring
-    /// is touched, so the ring is never left half-claimed.
+    /// Consumes the front of `buffer`, queueing live
+    /// descriptors for transmit and passing empty slots
+    /// through; returns the consumed count — retry with
+    /// the unconsumed tail. Panics on a descriptor from a
+    /// different umem.
     #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
     pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
             .unwrap_or(u32::MAX)
             .min(self.tx_ring.size());
-        // Validate before claiming: a caught panic after claim
-        // would desync the producer index for good.
+        // Validate before claiming: a caught panic after the
+        // claim would desync the producer index for good.
         let umem_id = self.umem.id();
         let mut transmit_count: u32 = 0;
         for descriptor in &buffer[..size as usize] {
@@ -165,14 +133,13 @@ impl XdpSocket {
                 transmit_count += 1;
             }
         }
-        // Clamped to the ring's free space: an unclamped
+        // Clamp to the ring's free space: an unclamped
         // all-or-nothing claim makes no progress until the
         // ring can seat the whole batch.
         let request = transmit_count.min(self.tx_ring.free(transmit_count));
         let (tx_available, tx_index) = self.tx_ring.claim(request);
-        // Consumption stops at the first live descriptor
-        // without a tx slot, keeping the consumed front
-        // contiguous for retry-with-tail.
+        // Stop at the first live descriptor without a tx
+        // slot, keeping the consumed front contiguous.
         let mut written: u32 = 0;
         let mut consumed: u32 = 0;
         for descriptor in &mut buffer[..size as usize] {
@@ -186,17 +153,14 @@ impl XdpSocket {
                     descriptor.length,
                 );
                 written += 1;
-                // Ownership of the frame moved to the tx ring; the
-                // emptied descriptor is the proof this handle can
-                // no longer reach it.
+                // Ownership of the frame moved to the tx ring.
                 descriptor.defuse();
             }
             consumed += 1;
         }
         self.tx_ring.commit(written);
         self.kick();
-        // Drain every completion available, not just this batch's
-        // worth; nothing else returns frames to the pool.
+        // Nothing else returns tx frames to the pool.
         self.complete();
 
         consumed
@@ -204,21 +168,17 @@ impl XdpSocket {
 
     /// Tops the fill ring up from the umem's pool.
     fn fill(&mut self) {
-        // Clamp to the ring's free space: claim is
-        // all-or-nothing, so an unclamped request sized to the
-        // full ring succeeds only once the kernel has drained
-        // it completely, starving RX in bursts meanwhile.
+        // Clamp to the ring's free space: an unclamped
+        // all-or-nothing claim would starve RX in bursts.
         let ring_size = self.fill_ring.size();
         let want = ring_size.min(self.fill_ring.free(ring_size));
-        // The pool grant caps the claim at what the pool holds.
         let pool = self.umem.pool();
         let Some((count, pool_index)) = pool.claim_read(want) else {
             return;
         };
 
         // The kernel only consumes fill entries, so the free
-        // space checked above cannot shrink: the claim seats
-        // the whole grant.
+        // space checked above cannot shrink.
         let (available, index) = self.fill_ring.claim(count);
         assert!(
             available == count,
@@ -257,18 +217,15 @@ impl XdpSocket {
         self.completion_ring.commit(filled);
     }
 
-    /// Reserves pool slots for frames leaving the datapath,
-    /// waiting out transient claim gaps. The pool is sized
-    /// to seat every frame it serves, so room for in-flight
-    /// frames always exists; the wait only covers another
-    /// worker's grant between claim and commit.
+    /// Claims pool slots for frames leaving the datapath.
+    /// Room always exists — an in-flight frame holds no
+    /// pool slot — so the spin only covers another
+    /// worker's open grant.
     fn pool_claim_write(pool: &FramePool, size: u32) -> u32 {
         loop {
             if let Some((available, index)) = pool.claim_write(size) {
-                // claim_write caps grants at the pool's capacity;
-                // committing the requested size against a capped
-                // grant would corrupt the pool, so a burst must
-                // never exceed it.
+                // A capped grant committed at the requested size
+                // would corrupt the pool.
                 assert!(
                     available == size,
                     "The pool capacity is smaller than a burst. This is a bug."
@@ -280,7 +237,7 @@ impl XdpSocket {
         }
     }
 
-    /// Wakes the driver; non-blocking and carries no data.
+    /// Wakes the driver; non-blocking, carries no data.
     fn kick(&mut self) {
         unsafe { sendto(self.socket_fd(), null_mut(), 0, MSG_DONTWAIT, null_mut(), 0) };
     }
