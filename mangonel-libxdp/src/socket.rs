@@ -60,8 +60,8 @@ impl XdpSocket {
     ) -> Self {
         Self {
             socket,
-            tx_ring,
             rx_ring,
+            tx_ring,
             fill_ring,
             completion_ring,
             umem,
