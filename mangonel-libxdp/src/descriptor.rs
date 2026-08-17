@@ -2,24 +2,12 @@ use std::fmt;
 
 use crate::umem::Umem;
 
-/// A received frame's owned handle: which umem the frame
-/// lives in, where, and how many bytes it occupies.
-///
-/// Only `XdpSocket::receive` mints descriptors; fields are
-/// crate-private and the type is not `Clone`, so a minted
-/// descriptor is its frame's sole handle, and
-/// `XdpSocket::send` consumes it before the frame re-enters
-/// circulation. That is what makes [`Self::as_slice_mut`]
-/// sound.
-///
-/// The descriptor holds a handle to its umem, so it can
-/// move freely — into queues, tables, across threads —
-/// without a paired umem reference, and it cannot outlive
-/// the mapping. Recycling is explicit: [`Self::drop`]
-/// returns the frame to the pool, and a descriptor that
-/// merely goes out of scope leaks its frame — the cost of
-/// letting the owner decide when, and on which thread, a
-/// frame returns.
+/// A received frame's owned handle. Not `Clone` and minted
+/// only by `XdpSocket::receive`, so a live descriptor is
+/// its frame's sole handle — what makes
+/// [`Self::as_slice_mut`] sound. Recycling is explicit
+/// ([`Self::drop`]); a descriptor that merely goes out of
+/// scope leaks its frame.
 #[derive(Default)]
 pub struct XdpDescriptor {
     /// The minting umem; `None` when empty
@@ -56,20 +44,16 @@ impl XdpDescriptor {
             .expect("XdpDescriptor is empty: default-constructed or already consumed.")
     }
 
-    /// Empties the descriptor without recycling: ownership
-    /// of the frame has moved elsewhere — a tx ring or a
-    /// pool grant.
+    /// Empties without recycling: frame ownership has
+    /// moved elsewhere.
     pub(crate) fn defuse(&mut self) {
         self.umem = None;
         self.address = 0;
         self.length = 0;
     }
 
-    /// Returns the frame to its umem's pool, consuming the
-    /// descriptor; an empty descriptor is a no-op. Any
-    /// owner on any thread may call this — a pipeline
-    /// stage that filters frames drops them here without
-    /// routing them through `send`.
+    /// Returns the frame to its umem's pool; a no-op on an
+    /// empty descriptor.
     pub fn drop(mut self) {
         let Some(umem) = self.umem.take() else {
             return;
@@ -83,22 +67,14 @@ impl XdpDescriptor {
 
                 return;
             }
-            // A live frame holds no pool slot, so room exists; the
-            // spin only covers another thread's grant between
-            // claim and commit.
+            // A live frame holds no pool slot, so room exists;
+            // the spin covers another thread's open grant.
             std::hint::spin_loop();
         }
     }
 
     /// A shared view of the buffer: headroom, then the
-    /// frame.
-    ///
-    /// Borrowing `self` keeps the descriptor out of `send`
-    /// while the slice lives.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the descriptor is empty.
+    /// frame. Panics if the descriptor is empty.
     pub fn as_slice(&self) -> &[u8] {
         let umem = self.umem();
         let headroom_size = umem.config().frame_headroom;
@@ -112,20 +88,14 @@ impl XdpDescriptor {
             .expect("XdpDescriptor range falls outside the umem region. This is a bug.")
             .cast::<u8>();
 
-        // SAFETY: A live descriptor still owns its frame, so it
-        // sits on no ring and the kernel stays off it; send
-        // needs `&mut self` and is excluded while this
-        // borrow lives. get_data bounds the range; the umem
-        // handle held by self keeps it mapped.
+        // SAFETY: A live descriptor owns its frame — on no
+        // ring, kernel off it; send needs `&mut self` and is
+        // excluded while the borrow lives. get_data bounds
+        // the range; self's umem handle keeps it mapped.
         unsafe { std::slice::from_raw_parts(offset, length) }
     }
 
-    /// An exclusive view of the buffer: headroom, then the
-    /// frame.
-    ///
-    /// # Panics
-    ///
-    /// As [`Self::as_slice`].
+    /// Exclusive [`Self::as_slice`].
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
         let umem = self.umem();
         let headroom_size = umem.config().frame_headroom;
@@ -139,31 +109,21 @@ impl XdpDescriptor {
             .expect("XdpDescriptor range falls outside the umem region. This is a bug.")
             .cast::<u8>();
 
-        // SAFETY: As above; exclusivity holds because a live
-        // descriptor is its frame's sole handle and `&mut
-        // self` locks it while the slice lives.
+        // SAFETY: As as_slice; exclusivity holds because a
+        // live descriptor is its frame's sole handle and
+        // `&mut self` locks it while the slice lives.
         unsafe { std::slice::from_raw_parts_mut(offset, length) }
     }
 
-    /// The received bytes — the frame, headroom skipped.
-    /// What a caller parsing what arrived wants;
-    /// [`Self::as_slice`] starts at the headroom
-    /// instead, for a caller prepending.
-    ///
-    /// # Panics
-    ///
-    /// As [`Self::as_slice`].
+    /// The received bytes, headroom skipped;
+    /// [`Self::as_slice`] includes it for prepending.
     pub fn data(&self) -> &[u8] {
         let headroom = self.umem().config().frame_headroom as usize;
 
         &self.as_slice()[headroom..]
     }
 
-    /// The received bytes, exclusive, headroom skipped.
-    ///
-    /// # Panics
-    ///
-    /// As [`Self::as_slice`].
+    /// Exclusive [`Self::data`].
     pub fn data_mut(&mut self) -> &mut [u8] {
         let headroom = self.umem().config().frame_headroom as usize;
 

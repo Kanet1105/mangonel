@@ -68,11 +68,9 @@ impl Producer {
     }
 
     /// All-or-nothing: grants `size` slots or none. Every
-    /// claim moves the cached producer index at once and
-    /// must be matched by a commit of exactly the granted
-    /// count — committing less desyncs the ring for good.
-    ///
-    /// Wraps `xsk_ring_prod__reserve`.
+    /// claim must be committed at exactly the granted
+    /// count — less desyncs the ring for good. Wraps
+    /// `xsk_ring_prod__reserve`.
     pub fn claim(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
@@ -106,9 +104,8 @@ impl Producer {
         unsafe { *xsk_ring_prod__fill_addr(self.as_ptr(), index) = address }
     }
 
-    /// Publishes the claimed slots to the consumer side.
-    ///
-    /// Wraps `xsk_ring_prod__submit`.
+    /// Publishes the claimed slots. Wraps
+    /// `xsk_ring_prod__submit`.
     pub fn commit(&self, offset: u32) {
         unsafe { xsk_ring_prod__submit(self.as_ptr(), offset) };
     }
@@ -142,12 +139,10 @@ impl Consumer {
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
-    /// Up to `size`: grants the filled run and advances the
-    /// cached consumer index — a claim, not a look; two
-    /// claims return different windows. Every claim must be
-    /// matched by a commit of exactly the granted count.
-    ///
-    /// Wraps `xsk_ring_cons__peek`.
+    /// Grants up to `size` filled slots — a claim, not a
+    /// look: two claims return different windows, and each
+    /// must be committed at the granted count. Wraps
+    /// `xsk_ring_cons__peek`.
     pub fn claim(&self, size: u32) -> (u32, u32) {
         let mut index = 0;
         let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
@@ -170,9 +165,8 @@ impl Consumer {
         unsafe { xsk_ring_cons__comp_addr(self.as_ptr(), index).read() }
     }
 
-    /// Hands the claimed slots back to the kernel side.
-    ///
-    /// Wraps `xsk_ring_cons__release`.
+    /// Hands the claimed slots back to the kernel. Wraps
+    /// `xsk_ring_cons__release`.
     pub fn commit(&self, offset: u32) {
         unsafe { xsk_ring_cons__release(self.as_ptr(), offset) };
     }

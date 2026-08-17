@@ -7,26 +7,11 @@ use std::{
     },
 };
 
-/// MPMC ring of frame addresses in the split head/tail
-/// style (as DPDK's `rte_ring`): each side claims a range
-/// by CASing its head, touches the slots, then commits by
-/// advancing its tail in claim order. The opposite side
-/// trusts only the tail, so a claimed-but-uncommitted
-/// range is never visible to it.
-///
-/// The commit step is explicit, mirroring the xsk rings:
-/// [`Self::commit_write`] after writes, [`Self::commit_read`] after
-/// reads. Every grant must be committed exactly once with
-/// its own `(index, count)`, after touching every slot in
-/// it — a grant that never commits stalls the ring for
-/// good, because later commits wait for it in claim order.
-///
-/// Positions wrap in `u32` like the xsk cursors; slot
-/// lookups mask into range.
-///
-/// A cheaply clonable handle, like [`crate::Umem`]:
-/// clones share one ring, which is how workers share the
-/// pool.
+/// MPMC ring of frame addresses, split head/tail style (as
+/// DPDK's `rte_ring`): claim a range, touch its slots,
+/// commit. Every grant must be committed exactly once;
+/// commits land in claim order, so an uncommitted grant
+/// stalls the ring. Clones share one ring.
 #[derive(Clone)]
 pub struct FramePool {
     inner: Arc<PoolInner>,
@@ -48,12 +33,9 @@ struct PoolInner {
     slots: Box<[UnsafeCell<u64>]>,
 }
 
-// SAFETY: Slot values are plain u64s. A successful head
-// CAS grants a position range to exactly one thread, and
-// the range becomes visible to the opposite side only
-// through the tail store after that thread is done; the
-// tail's Release/Acquire pair orders the two access
-// windows so no two threads touch a cell concurrently.
+// SAFETY: A head CAS grants a range to exactly one thread,
+// and the tail's Release/Acquire pair orders the access
+// windows, so no two threads touch a cell concurrently.
 unsafe impl Send for PoolInner {}
 unsafe impl Sync for PoolInner {}
 
@@ -84,32 +66,25 @@ impl FramePool {
         self.inner.slots[(position & self.inner.mask) as usize].get()
     }
 
-    /// Truncating to `u32` is exactly the wrap the cursors
-    /// use, so an offset index computed in `usize` lands on
-    /// the same position.
+    /// Truncation matches the cursors' `u32` wrap.
     #[allow(clippy::cast_possible_truncation)]
     fn position(index: usize) -> u32 {
         index as u32
     }
 
-    /// All-or-nothing, like the xsk producer's `reserve`:
-    /// `Some((available, index))` grants the whole burst
-    /// (capped at the ring size), `None` grants nothing.
-    /// Touch every granted index with [`Self::write_at`],
-    /// then commit the grant with [`Self::commit_write`].
+    /// All-or-nothing: grants the whole burst (capped at
+    /// the ring size) or `None`. `write_at` every granted
+    /// index, then `commit_write` the grant.
     pub fn claim_write(&self, size: u32) -> Option<(u32, u32)> {
         if size == 0 {
             return None;
         }
 
-        // A burst can never exceed the ring itself.
         let size = size.min(self.inner.size);
         let mut head = self.inner.producer_head.load(Ordering::Relaxed);
         loop {
-            // Slots are writable up to one lap past the reads
-            // the consumers have committed. The Acquire pairs
-            // with the Release in commit_read, so those reads have
-            // finished before we overwrite.
+            // Acquire pairs with commit_read's Release: those
+            // reads finished before we overwrite.
             let free_until = self
                 .inner
                 .consumer_tail
@@ -133,18 +108,15 @@ impl FramePool {
         }
     }
 
-    /// Writes `value` into the slot at `index`. Not
-    /// visible to consumers until [`Self::commit_write`] commits
-    /// the grant.
+    /// Invisible to consumers until `commit_write`.
     pub fn write_at(&self, index: usize, value: u64) {
         // SAFETY: The slot is owned by this producer between
-        // claim_write and commit_write; no reference outlives the
-        // call.
+        // claim_write and commit_write.
         unsafe { *self.slot(Self::position(index)) = value };
     }
 
-    /// Commits a write grant, publishing its positions to
-    /// consumers. Same contract as [`Self::commit_read`].
+    /// Publishes a write grant; `(index, size)` must match
+    /// the claim. Waits for earlier grants to commit.
     pub fn commit_write(&self, index: usize, size: u32) {
         let index = Self::position(index);
         while self.inner.producer_tail.load(Ordering::Acquire) != index {
@@ -156,23 +128,19 @@ impl FramePool {
             .store(index.wrapping_add(size), Ordering::Release);
     }
 
-    /// Up to `size`, like the xsk consumer's `peek`:
-    /// `Some((filled, index))` grants committed positions,
-    /// `None` means nothing is readable. Touch every
-    /// granted index with [`Self::read_at`], then commit
-    /// the grant with [`Self::commit_read`].
+    /// Grants up to `size` committed positions, or `None`.
+    /// `read_at` every granted index, then `commit_read`
+    /// the grant.
     pub fn claim_read(&self, size: u32) -> Option<(u32, u32)> {
         if size == 0 {
             return None;
         }
 
-        // A burst can never exceed the ring itself.
         let size = size.min(self.inner.size);
         let mut head = self.inner.consumer_head.load(Ordering::Relaxed);
         loop {
-            // Only committed writes are readable. The Acquire
-            // pairs with the Release in commit_write, making the
-            // slot contents visible.
+            // Acquire pairs with commit_write's Release: the
+            // slot contents are visible.
             let committed = self.inner.producer_tail.load(Ordering::Acquire);
             // In [0, size] regardless of u32 wrap.
             let available = committed.wrapping_sub(head);
@@ -181,8 +149,6 @@ impl FramePool {
                 return None;
             }
 
-            // The claim itself publishes nothing; the tails
-            // carry the data ordering.
             match self.inner.consumer_head.compare_exchange_weak(
                 head,
                 head.wrapping_add(filled),
@@ -197,21 +163,16 @@ impl FramePool {
         }
     }
 
-    /// Reads the slot at `index`. The slot stays owned by
-    /// this consumer until [`Self::commit_read`] commits the
-    /// grant.
+    /// Owned by this consumer until `commit_read`.
     pub fn read_at(&self, index: usize) -> u64 {
         // SAFETY: The slot is owned by this consumer between
-        // claim_read and commit_read; no reference outlives the
-        // call.
+        // claim_read and commit_read.
         unsafe { *self.slot(Self::position(index)) }
     }
 
-    /// Commits a read grant, freeing its positions for
-    /// producers. `(index, size)` must be exactly
-    /// what [`Self::claim_read`] granted. Commits land in
-    /// claim order, so this waits for earlier grants —
-    /// which is why every grant must commit promptly.
+    /// Frees a read grant for producers; `(index, size)`
+    /// must match the claim. Waits for earlier grants to
+    /// commit.
     pub fn commit_read(&self, index: usize, size: u32) {
         let index = Self::position(index);
         while self.inner.consumer_tail.load(Ordering::Acquire) != index {
@@ -224,9 +185,7 @@ impl FramePool {
     }
 }
 
-/// Pads to a cache line so the cursors do not share one:
-/// an update to any cursor would otherwise invalidate the
-/// others' cached lines on every operation.
+/// Pads to a cache line so the cursors do not share one.
 #[repr(align(64))]
 struct CacheAligned<T>(T);
 
@@ -244,9 +203,8 @@ mod tests {
 
     use super::FramePool;
 
-    /// Empty and full refusals, the oversized-claim cap,
-    /// commit visibility, and value roundtrips across 100
-    /// laps of a small ring.
+    /// Refusals, the oversized-claim cap, commit
+    /// visibility, and roundtrips across laps.
     #[test]
     fn protocol() {
         let pool = FramePool::new(4);

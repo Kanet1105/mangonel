@@ -54,9 +54,7 @@ struct UmemInner {
     area: UmemArea,
     config: xsk_umem_config,
     id: usize,
-    /// Every socket on this umem shares this pool: a frame
-    /// received on one socket and transmitted on another
-    /// completes back into the same pool.
+    /// Shared by every socket on this umem.
     pool: FramePool,
 }
 
@@ -157,12 +155,8 @@ impl Umem {
             "xsk_umem__create left a ring unpopulated. This is a bug."
         );
 
-        // Every frame starts in the pool. The capacity rounds up
-        // to the pool's power-of-two requirement — usually a
-        // no-op, as frame counts are already powers of two.
-        // Returning frames always has room even without
-        // headroom: a frame leaving the datapath holds no pool
-        // slot, so free slots always cover in-flight frames.
+        // Every frame starts in the pool; the capacity rounds
+        // up to the pool's power-of-two requirement.
         let pool = FramePool::new((frame_count as usize).next_power_of_two());
         let (available, index) = pool
             .claim_write(frame_count)
@@ -208,9 +202,8 @@ impl Umem {
         self.inner.id
     }
 
-    /// The shared pool every socket on this umem draws free
-    /// frames from and completes them back into. Crate-only:
-    /// the claim/commit contract stays behind the socket API.
+    /// Crate-only: the claim/commit contract stays behind
+    /// the socket API.
     pub(crate) fn pool(&self) -> &FramePool {
         &self.inner.pool
     }
