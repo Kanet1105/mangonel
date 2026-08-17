@@ -181,8 +181,8 @@ pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Bin
         let socket = XdpSocket::new(
             NonNull::new(socket)
                 .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
-            tx,
             rx,
+            tx,
             fill,
             completion,
             umem.clone(),
@@ -274,8 +274,8 @@ pub fn bind_with_umem(
         let socket = XdpSocket::new(
             NonNull::new(socket)
                 .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
-            tx_ring,
             rx_ring,
+            tx_ring,
             fill_ring,
             completion_ring,
             umem.clone(),
