@@ -1,7 +1,9 @@
 use std::ptr::{NonNull, null_mut};
 
-use libc::{MSG_DONTWAIT, POLLIN, poll, pollfd, sendto};
-use mangonel_libxdp_sys::{xsk_socket, xsk_socket__delete, xsk_socket__fd};
+use libc::{MSG_DONTWAIT, POLLIN, SOL_XDP, getsockopt, poll, pollfd, sendto};
+use mangonel_libxdp_sys::{
+    XDP_OPTIONS, XDP_OPTIONS_ZEROCOPY, xdp_options, xsk_socket, xsk_socket__delete, xsk_socket__fd,
+};
 
 use crate::{
     descriptor::XdpDescriptor,
@@ -68,10 +70,29 @@ impl XdpSocket {
         }
     }
 
-    /// The umem the socket's frames live in — for the
-    /// descriptor slice accessors.
-    pub fn umem(&self) -> &Umem {
+    /// The umem the socket's frames live in — what
+    /// [`crate::bind_shared`] clones into its new socket.
+    pub(crate) fn umem(&self) -> &Umem {
         &self.umem
+    }
+
+    /// Whether the kernel bound this socket zero-copy. A
+    /// failed getsockopt counts as no.
+    pub fn is_zero_copy(&self) -> bool {
+        let mut options = xdp_options { flags: 0 };
+        let mut length = libc::socklen_t::try_from(size_of::<xdp_options>())
+            .expect("xdp_options size overflows socklen_t. This is a bug.");
+        let value = unsafe {
+            getsockopt(
+                self.socket_fd(),
+                SOL_XDP,
+                XDP_OPTIONS.cast_signed(),
+                (&raw mut options).cast(),
+                &raw mut length,
+            )
+        };
+
+        value == 0 && options.flags & XDP_OPTIONS_ZEROCOPY != 0
     }
 
     /// Fills the front of `buffer` with one minted
