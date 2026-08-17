@@ -59,6 +59,16 @@ struct UmemInner {
     pool: FramePool,
 }
 
+// SAFETY: The region is process-wide memory with a stable
+// address for the lifetime of the Umem.
+unsafe impl Send for UmemInner {}
+
+// SAFETY: The rings belong to the sockets; the only mutable
+// state after creation is the pool, which synchronizes
+// itself. Which frames a thread may touch is governed by
+// XdpDescriptor's mint rule, not by this type.
+unsafe impl Sync for UmemInner {}
+
 impl Drop for UmemInner {
     fn drop(&mut self) {
         let value = unsafe { xsk_umem__delete(self.umem.as_ptr()) };
@@ -70,16 +80,6 @@ impl Drop for UmemInner {
         }
     }
 }
-
-// SAFETY: The region is process-wide memory with a stable
-// address for the lifetime of the Umem.
-unsafe impl Send for UmemInner {}
-
-// SAFETY: The rings belong to the sockets; the only mutable
-// state after creation is the pool, which synchronizes
-// itself. Which frames a thread may touch is governed by
-// XdpDescriptor's mint rule, not by this type.
-unsafe impl Sync for UmemInner {}
 
 impl Umem {
     pub(crate) fn new(
