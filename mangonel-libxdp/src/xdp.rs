@@ -4,12 +4,9 @@ use std::{
     ptr::{NonNull, null_mut},
 };
 
-use libc::{SOL_XDP, getsockopt};
 use mangonel_libxdp_sys::{
-    XDP_OPTIONS, XDP_OPTIONS_ZEROCOPY, xdp_options, xsk_socket__create_shared, xsk_socket_config,
-    xsk_socket_config__bindgen_ty_1,
+    xsk_socket__create_shared, xsk_socket_config, xsk_socket_config__bindgen_ty_1,
 };
-use mangonel_nic::nic::Nic;
 
 use crate::{
     pool::FramePool,
@@ -22,274 +19,164 @@ use crate::{
 /// completion.
 const RINGS_PER_SOCKET: u32 = 4;
 
-/// What [`bind`] returns: one [`XdpSocket`] per queue, the
-/// umem backing them, and whether the kernel bound
-/// zero-copy.
-///
-/// The umem carries the seeded frame pool: every socket on
-/// it — including ones added with [`bind_with_umem`] —
-/// draws from and completes back into the same pool, so a
-/// frame forwarded between interfaces returns to the pool
-/// it left.
-pub struct Binding {
-    pub sockets: Vec<XdpSocket>,
-    pub umem: Umem,
-    pub zero_copy: bool,
-}
-
-/// One queue's rings, allocated before its socket binds.
-/// A slot is taken only after a successful bind: an
-/// unclaimed fill/completion pair must outlive the umem,
-/// whose delete dereferences the pair saved at creation.
-struct QueueRings {
-    rx: Consumer,
-    tx: Producer,
-    fill: Producer,
-    completion: Consumer,
-}
-
-/// Opens one [`XdpSocket`] per usable queue (`min(rx, tx)`)
-/// on the interface, socket `i` bound to queue `i`, all
-/// sharing one [`Umem`].
-///
-/// The umem is sized for `umem_interfaces` interfaces
-/// sharing it: pass `1` for a lone interface, or the total
-/// when [`bind_with_umem`] will add more, so every socket's
-/// rings and every pool have frames. The umem must outlive
-/// every socket. Attach and copy mode are the kernel's
-/// preference; the returned bool is whether it bound
-/// zero-copy.
+/// Opens one [`XdpSocket`] on one queue of the interface,
+/// with a fresh umem sized for `share_count` sockets — this
+/// one plus every [`bind_shared`] partner that will join
+/// it; more shares still work, on a thinner frame margin.
+/// Queue ids run in `0..` the interface's usable queue
+/// count. Attach and copy mode are the kernel's
+/// preference; see [`XdpSocket::is_zero_copy`] for what it
+/// chose.
 ///
 /// # Panics
 ///
-/// Panics on broken libxdp/kernel contracts: unpopulated
-/// rings, a null socket, an interface with zero queues.
-pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Binding, XdpError> {
-    let interface_name = interface_name.as_ref();
+/// Panics on a zero `share_count`, and on broken
+/// libxdp/kernel contracts: unpopulated rings, a null
+/// socket.
+pub fn bind(
+    interface_name: impl AsRef<str>,
+    queue_id: u32,
+    share_count: usize,
+) -> Result<XdpSocket, XdpError> {
+    // A umem serves at least the socket bound over it.
+    assert!(
+        share_count > 0,
+        "The share count '{share_count}' sizes a umem for no sockets."
+    );
 
     // The umem mapping counts against RLIMIT_MEMLOCK.
     setrlimit().map_err(Error::Setrlimit)?;
 
-    let queue_count = Nic::open(interface_name).map_err(Error::Nic)?.xdp_queues();
-    // The kernel refuses zero-queue interfaces, and counting
-    // errors rather than reporting zero.
-    assert!(
-        queue_count > 0,
-        "The interface reports zero queues. This is a bug."
-    );
+    // Sized for every ring of every sharing socket being
+    // full at once, so the pool never starves.
+    let frame_count = u32::try_from(share_count)
+        .ok()
+        .and_then(|sockets| sockets.checked_mul(DEFAULT_RING_SIZE))
+        .and_then(|frames| frames.checked_mul(RINGS_PER_SOCKET))
+        .ok_or(Error::TooManySockets { share_count })?;
 
-    // All rings, created before the umem: on every error path
-    // the umem — declared later, dropped first — is deleted
-    // while any unclaimed pair it references is alive.
-    let mut queue_rings = (0..queue_count)
-        .map(|_| {
-            let (fill, completion) = ring_buffer(DEFAULT_RING_SIZE)?;
-            let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
+    // Rings before the umem: the umem — declared later,
+    // dropped first on error paths — is deleted while the
+    // fill/completion pair it saves at creation is alive.
+    let (fill, completion) = ring_buffer(DEFAULT_RING_SIZE)?;
+    let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
+    let umem = Umem::new(
+        DEFAULT_FRAME_SIZE,
+        DEFAULT_FRAME_HEADROOM,
+        frame_count,
+        false,
+        &fill,
+        &completion,
+    )?;
 
-            Ok(Some(QueueRings {
-                rx,
-                tx,
-                fill,
-                completion,
-            }))
-        })
-        .collect::<Result<Vec<_>, RingError>>()?;
-
-    // Sized for every ring of every queue of every sharing
-    // interface being full at once, so the pool never starves.
-    let frame_count = DEFAULT_RING_SIZE
-        .checked_mul(RINGS_PER_SOCKET)
-        .and_then(|frames| frames.checked_mul(queue_count))
-        .and_then(|frames| frames.checked_mul(umem_interfaces))
-        .ok_or(Error::TooManyQueues { queue_count })?;
-
-    let umem = {
-        let first = queue_rings[0]
-            .as_ref()
-            .expect("Queue rings taken before any bind. This is a bug.");
-
-        Umem::new(
-            DEFAULT_FRAME_SIZE,
-            DEFAULT_FRAME_HEADROOM,
-            frame_count,
-            false,
-            &first.fill,
-            &first.completion,
-        )?
-    };
-
-    let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
-    let socket_config = socket_config();
-
-    let mut sockets = Vec::with_capacity(queue_count as usize);
-    // Set from queue 0; every queue on an interface binds in
-    // the same mode.
-    let mut zero_copy = false;
-    for queue_id in 0..queue_count {
-        let slot = &mut queue_rings[queue_id as usize];
-        let rings = slot
-            .as_ref()
-            .expect("Queue rings taken twice. This is a bug.");
-
-        // Queue 0's fill/completion pointers are the pair saved
-        // at umem creation, binding the umem's owning
-        // socket; the rest are fresh and bind with
-        // XDP_SHARED_UMEM.
-        let mut socket = null_mut();
-        let value = unsafe {
-            xsk_socket__create_shared(
-                &mut socket,
-                interface.as_ptr(),
-                queue_id,
-                umem.as_ptr(),
-                rings.rx.as_ptr(),
-                rings.tx.as_ptr(),
-                rings.fill.as_ptr(),
-                rings.completion.as_ptr(),
-                &socket_config,
-            )
-        };
-        if value.is_negative() {
-            // Bound sockets drop with `sockets`, before the umem;
-            // unclaimed rings drop after it.
-            return Err(Error::Initialize {
-                queue_id,
-                source: io::Error::from_raw_os_error(-value),
-            }
-            .into());
-        }
-
-        // The invariant the ring accessors rely on.
-        assert!(
-            rings.rx.is_registered()
-                && rings.tx.is_registered()
-                && rings.fill.is_registered()
-                && rings.completion.is_registered(),
-            "xsk_socket__create_shared left a ring unpopulated. This is a bug."
-        );
-
-        // Claimed: the socket owns its rings past delete.
-        let QueueRings {
-            rx,
-            tx,
-            fill,
-            completion,
-        } = slot
-            .take()
-            .expect("Queue rings taken twice. This is a bug.");
-
-        let socket = XdpSocket::new(
-            NonNull::new(socket)
-                .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
-            rx,
-            tx,
-            fill,
-            completion,
-            umem.clone(),
-        );
-
-        // Once per interface: every queue lands in the same mode.
-        if queue_id == 0 {
-            zero_copy = warn_copy_mode(interface_name, socket.socket_fd());
-        }
-
-        sockets.push(socket);
-    }
-
-    Ok(Binding {
-        sockets,
+    create_socket(
+        interface_name.as_ref(),
+        queue_id,
+        rx,
+        tx,
+        fill,
+        completion,
         umem,
-        zero_copy,
-    })
+    )
 }
 
-/// Opens one [`XdpSocket`] per usable queue on the
-/// interface, sharing an existing `umem`: a frame received
-/// on either interface may be transmitted on the other with
-/// no copy. Binds with `XDP_SHARED_UMEM`, inheriting the
-/// first bind's copy mode.
-///
-/// These sockets share the umem's frame pool with the
-/// [`bind`] that created it — which is what makes
-/// forwarding sound. Size that umem for both interfaces
-/// via `bind`'s `umem_interfaces`.
+/// Opens one [`XdpSocket`] on one queue, sharing
+/// `socket`'s umem: a frame received on either socket may
+/// be transmitted on the other with no copy, and both draw
+/// from — and complete back into — the same frame pool,
+/// which is what makes forwarding between them sound.
+/// Binds with `XDP_SHARED_UMEM`, inheriting the first
+/// bind's copy mode. Count every share in the [`bind`]
+/// `share_count` that sized the umem.
 ///
 /// # Panics
 ///
 /// As [`bind`].
-pub fn bind_with_umem(
+pub fn bind_shared(
     interface_name: impl AsRef<str>,
-    umem: &Umem,
-) -> Result<Vec<XdpSocket>, XdpError> {
-    let interface_name = interface_name.as_ref();
+    queue_id: u32,
+    socket: &XdpSocket,
+) -> Result<XdpSocket, XdpError> {
+    // Fresh rings; none can be the umem's saved pair, so no
+    // drop-order care is needed.
+    let (fill, completion) = ring_buffer(DEFAULT_RING_SIZE)?;
+    let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
 
-    let queue_count = Nic::open(interface_name).map_err(Error::Nic)?.xdp_queues();
-    // As in bind.
-    assert!(
-        queue_count > 0,
-        "The interface reports zero queues. This is a bug."
-    );
+    create_socket(
+        interface_name.as_ref(),
+        queue_id,
+        rx,
+        tx,
+        fill,
+        completion,
+        socket.umem().clone(),
+    )
+}
 
+/// Binds one socket over the rings and umem. `umem` is
+/// deliberately the last parameter: parameters drop in
+/// reverse order, so on an error path an owning umem is
+/// deleted while the fill/completion pair it saved is
+/// still alive.
+fn create_socket(
+    interface_name: &str,
+    queue_id: u32,
+    rx: Consumer,
+    tx: Producer,
+    fill: Producer,
+    completion: Consumer,
+    umem: Umem,
+) -> Result<XdpSocket, XdpError> {
     let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config();
 
-    let mut sockets = Vec::with_capacity(queue_count as usize);
-    for queue_id in 0..queue_count {
-        // Fresh rings; none can be the umem's saved pair, so no
-        // drop-order care is needed.
-        let (fill_ring, completion_ring) = ring_buffer(DEFAULT_RING_SIZE)?;
-        let (tx_ring, rx_ring) = ring_buffer(DEFAULT_RING_SIZE)?;
-
-        let mut socket = null_mut();
-        let value = unsafe {
-            xsk_socket__create_shared(
-                &mut socket,
-                interface.as_ptr(),
-                queue_id,
-                umem.as_ptr(),
-                rx_ring.as_ptr(),
-                tx_ring.as_ptr(),
-                fill_ring.as_ptr(),
-                completion_ring.as_ptr(),
-                &socket_config,
-            )
-        };
-        if value.is_negative() {
-            return Err(Error::Initialize {
-                queue_id,
-                source: io::Error::from_raw_os_error(-value),
-            }
-            .into());
+    // For the umem's owning socket the fill/completion
+    // pointers are the pair saved at umem creation; for a
+    // sharing socket they are fresh and bind with
+    // XDP_SHARED_UMEM.
+    let mut socket = null_mut();
+    let value = unsafe {
+        xsk_socket__create_shared(
+            &mut socket,
+            interface.as_ptr(),
+            queue_id,
+            umem.as_ptr(),
+            rx.as_ptr(),
+            tx.as_ptr(),
+            fill.as_ptr(),
+            completion.as_ptr(),
+            &socket_config,
+        )
+    };
+    if value.is_negative() {
+        return Err(Error::Initialize {
+            queue_id,
+            source: io::Error::from_raw_os_error(-value),
         }
-
-        // As in bind.
-        assert!(
-            rx_ring.is_registered()
-                && tx_ring.is_registered()
-                && fill_ring.is_registered()
-                && completion_ring.is_registered(),
-            "xsk_socket__create_shared left a ring unpopulated. This is a bug."
-        );
-
-        let socket = XdpSocket::new(
-            NonNull::new(socket)
-                .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
-            rx_ring,
-            tx_ring,
-            fill_ring,
-            completion_ring,
-            umem.clone(),
-        );
-
-        // As in bind.
-        if queue_id == 0 {
-            warn_copy_mode(interface_name, socket.socket_fd());
-        }
-
-        sockets.push(socket);
+        .into());
     }
 
-    Ok(sockets)
+    // The invariant the ring accessors rely on.
+    assert!(
+        rx.is_registered()
+            && tx.is_registered()
+            && fill.is_registered()
+            && completion.is_registered(),
+        "xsk_socket__create_shared left a ring unpopulated. This is a bug."
+    );
+
+    let socket = XdpSocket::new(
+        NonNull::new(socket)
+            .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
+        rx,
+        tx,
+        fill,
+        completion,
+        umem,
+    );
+    warn_copy_mode(interface_name, &socket);
+
+    Ok(socket)
 }
 
 /// Zero flags: native attach and zero-copy where the driver
@@ -329,38 +216,16 @@ fn setrlimit() -> Result<(), io::Error> {
     Ok(())
 }
 
-/// Whether the kernel bound the socket zero-copy. A failed
-/// getsockopt counts as no.
-fn is_zero_copy(fd: i32) -> bool {
-    let mut options = xdp_options { flags: 0 };
-    let mut length = libc::socklen_t::try_from(size_of::<xdp_options>())
-        .expect("xdp_options size overflows socklen_t. This is a bug.");
-    let value = unsafe {
-        getsockopt(
-            fd,
-            SOL_XDP,
-            XDP_OPTIONS.cast_signed(),
-            (&raw mut options).cast(),
-            &raw mut length,
-        )
-    };
-
-    value == 0 && options.flags & XDP_OPTIONS_ZEROCOPY != 0
-}
-
-/// Warns on stderr when the interface fell back to copy
-/// mode — silent, and an order of magnitude slower, if left
-/// undetected — and returns whether it bound zero-copy.
-fn warn_copy_mode(interface_name: &str, fd: i32) -> bool {
-    let zero_copy = is_zero_copy(fd);
-    if !zero_copy {
+/// Warns on stderr when the socket fell back to copy mode
+/// — silent, and an order of magnitude slower, if left
+/// undetected.
+fn warn_copy_mode(interface_name: &str, socket: &XdpSocket) {
+    if !socket.is_zero_copy() {
         tracing::warn!(
             interface = interface_name,
             "driver lacks zero-copy support; running in copy mode"
         );
     }
-
-    zero_copy
 }
 
 /// The error type for this crate: any failure reported
@@ -381,10 +246,8 @@ enum Error {
     Setrlimit(io::Error),
     #[error("Interface name contains null character(s): {0}")]
     InvalidInterfaceName(NulError),
-    #[error("Failed to query the interface: {0}")]
-    Nic(mangonel_nic::nic::Error),
-    #[error("The interface's queue count '{queue_count}' overflows the umem frame count.")]
-    TooManyQueues { queue_count: u32 },
+    #[error("The share count '{share_count}' overflows the umem frame count.")]
+    TooManySockets { share_count: usize },
     #[error("Failed to initialize the socket for queue {queue_id}: {source}")]
     Initialize { queue_id: u32, source: io::Error },
 }

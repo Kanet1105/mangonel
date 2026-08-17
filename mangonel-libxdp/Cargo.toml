@@ -6,7 +6,6 @@ license = { workspace = true }
 
 [dependencies]
 mangonel-libxdp-sys = { workspace = true }
-mangonel-nic = { workspace = true }
 
 libc = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
