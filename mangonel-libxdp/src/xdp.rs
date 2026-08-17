@@ -18,7 +18,7 @@ use crate::{
     umem::{DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, Umem, UmemError},
 };
 
-/// Rings a frame can occupy at once: fill, rx, tx,
+/// Rings a frame can occupy at once: rx, tx, fill,
 /// completion.
 const RINGS_PER_SOCKET: u32 = 4;
 
@@ -42,10 +42,10 @@ pub struct Binding {
 /// unclaimed fill/completion pair must outlive the umem,
 /// whose delete dereferences the pair saved at creation.
 struct QueueRings {
+    rx: Consumer,
+    tx: Producer,
     fill: Producer,
     completion: Consumer,
-    tx: Producer,
-    rx: Consumer,
 }
 
 /// Opens one [`XdpSocket`] per usable queue (`min(rx, tx)`)
@@ -87,10 +87,10 @@ pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Bin
             let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
 
             Ok(Some(QueueRings {
+                rx,
+                tx,
                 fill,
                 completion,
-                tx,
-                rx,
             }))
         })
         .collect::<Result<Vec<_>, RingError>>()?;
@@ -161,8 +161,8 @@ pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Bin
 
         // The invariant the ring accessors rely on.
         assert!(
-            rings.tx.is_registered()
-                && rings.rx.is_registered()
+            rings.rx.is_registered()
+                && rings.tx.is_registered()
                 && rings.fill.is_registered()
                 && rings.completion.is_registered(),
             "xsk_socket__create_shared left a ring unpopulated. This is a bug."
@@ -170,10 +170,10 @@ pub fn bind(interface_name: impl AsRef<str>, umem_interfaces: u32) -> Result<Bin
 
         // Claimed: the socket owns its rings past delete.
         let QueueRings {
+            rx,
+            tx,
             fill,
             completion,
-            tx,
-            rx,
         } = slot
             .take()
             .expect("Queue rings taken twice. This is a bug.");
@@ -264,8 +264,8 @@ pub fn bind_with_umem(
 
         // As in bind.
         assert!(
-            tx_ring.is_registered()
-                && rx_ring.is_registered()
+            rx_ring.is_registered()
+                && tx_ring.is_registered()
                 && fill_ring.is_registered()
                 && completion_ring.is_registered(),
             "xsk_socket__create_shared left a ring unpopulated. This is a bug."
