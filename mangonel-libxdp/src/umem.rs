@@ -45,6 +45,7 @@ fn max_frame_size() -> u32 {
 /// `XdpDescriptor`'s zeroed id can never match a live umem.
 static NEXT_UMEM_ID: AtomicUsize = AtomicUsize::new(1);
 
+#[derive(Clone)]
 pub struct Umem {
     inner: Arc<UmemInner>,
 }
@@ -72,21 +73,13 @@ impl Drop for UmemInner {
 
 // SAFETY: The region is process-wide memory with a stable
 // address for the lifetime of the Umem.
-unsafe impl Send for Umem {}
+unsafe impl Send for UmemInner {}
 
 // SAFETY: The rings belong to the sockets; the only mutable
 // state after creation is the pool, which synchronizes
 // itself. Which frames a thread may touch is governed by
 // XdpDescriptor's mint rule, not by this type.
-unsafe impl Sync for Umem {}
-
-impl Clone for Umem {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
+unsafe impl Sync for UmemInner {}
 
 impl Umem {
     pub(crate) fn new(
@@ -174,15 +167,14 @@ impl Umem {
         pool.commit_write(index as usize, available);
 
         let umem = Self {
-            inner: UmemInner {
+            inner: Arc::new(UmemInner {
                 umem: NonNull::new(umem_ptr)
                     .expect("xsk_umem__create() returned a null pointer. This is a bug."),
                 area: umem_area,
                 config: umem_config,
                 id: NEXT_UMEM_ID.fetch_add(1, Ordering::Relaxed),
                 pool,
-            }
-            .into(),
+            }),
         };
 
         Ok(umem)
