@@ -3,7 +3,7 @@ use std::fmt;
 use crate::umem::Umem;
 
 /// A received frame's owned handle. Not `Clone` and minted
-/// only by `XdpSocket::receive`, so a live descriptor is
+/// only by `XdpReceiver::receive`, so a live descriptor is
 /// its frame's sole handle — what makes
 /// [`Self::as_slice_mut`] sound. Recycling is explicit
 /// ([`Self::drop`]); a descriptor that merely goes out of

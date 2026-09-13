@@ -11,7 +11,7 @@ use mangonel_libxdp_sys::{
 use crate::{
     pool::FramePool,
     ring::{Consumer, DEFAULT_RING_SIZE, Producer, RingError, ring_buffer},
-    socket::XdpSocket,
+    socket::{XdpReceiver, XdpSender, split},
     umem::{DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, Umem, UmemError},
 };
 
@@ -19,15 +19,17 @@ use crate::{
 /// completion.
 const RINGS_PER_SOCKET: u32 = 4;
 
-/// Opens one [`XdpSocket`] on one queue, with a fresh umem
-/// sized for `share_count` sockets — this one plus every
-/// [`bind_shared`] partner. Panics on a zero
-/// `share_count`, and on broken libxdp/kernel contracts.
+/// Binds one queue, with a fresh umem sized for
+/// `share_count` sockets — this one plus every
+/// [`bind_shared`] partner — and returns its transmit and
+/// receive halves, which may run on different threads.
+/// Panics on a zero `share_count`, and on broken
+/// libxdp/kernel contracts.
 pub fn bind(
     interface_name: impl AsRef<str>,
     queue_id: u32,
     share_count: usize,
-) -> Result<XdpSocket, XdpError> {
+) -> Result<(XdpSender, XdpReceiver), XdpError> {
     assert!(
         share_count > 0,
         "The share count '{share_count}' sizes a umem for no sockets."
@@ -69,15 +71,16 @@ pub fn bind(
     )
 }
 
-/// Opens one [`XdpSocket`] on one queue, sharing
-/// `socket`'s umem and frame pool — what makes zero-copy
-/// forwarding between them sound. Count every share in
-/// the [`bind`] `share_count` that sized the umem.
+/// Binds one queue sharing `sender`'s umem and frame
+/// pool — what makes zero-copy forwarding between them
+/// sound — and returns its halves as [`bind`] does. Count
+/// every share in the [`bind`] `share_count` that sized
+/// the umem.
 pub fn bind_shared(
     interface_name: impl AsRef<str>,
     queue_id: u32,
-    socket: &XdpSocket,
-) -> Result<XdpSocket, XdpError> {
+    sender: &XdpSender,
+) -> Result<(XdpSender, XdpReceiver), XdpError> {
     let (fill, completion) = ring_buffer(DEFAULT_RING_SIZE)?;
     let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
 
@@ -88,7 +91,7 @@ pub fn bind_shared(
         tx,
         fill,
         completion,
-        socket.umem().clone(),
+        sender.umem().clone(),
     )
 }
 
@@ -104,7 +107,7 @@ fn create_socket(
     fill: Producer,
     completion: Consumer,
     umem: Umem,
-) -> Result<XdpSocket, XdpError> {
+) -> Result<(XdpSender, XdpReceiver), XdpError> {
     let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config();
 
@@ -142,7 +145,7 @@ fn create_socket(
         "xsk_socket__create_shared left a ring unpopulated. This is a bug."
     );
 
-    let socket = XdpSocket::new(
+    let (sender, receiver) = split(
         NonNull::new(socket)
             .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
         rx,
@@ -151,9 +154,9 @@ fn create_socket(
         completion,
         umem,
     );
-    warn_copy_mode(interface_name, &socket);
+    warn_copy_mode(interface_name, &sender);
 
-    Ok(socket)
+    Ok((sender, receiver))
 }
 
 /// Zero flags: native attach and zero-copy with fallback.
@@ -192,8 +195,8 @@ fn setrlimit() -> Result<(), io::Error> {
 
 /// Warns when the socket fell back to copy mode — silent
 /// and an order of magnitude slower if left undetected.
-fn warn_copy_mode(interface_name: &str, socket: &XdpSocket) {
-    if !socket.is_zero_copy() {
+fn warn_copy_mode(interface_name: &str, sender: &XdpSender) {
+    if !sender.is_zero_copy() {
         tracing::warn!(
             interface = interface_name,
             "driver lacks zero-copy support; running in copy mode"
@@ -243,11 +246,14 @@ impl From<UmemError> for XdpError {
     }
 }
 
-// Guards the unsafe Send impls the worker move rests on;
-// nothing else in the crate would catch their removal.
+// Guards the unsafe Send and Sync impls the worker move
+// rests on; nothing else in the crate would catch their
+// removal. The halves being Send needs the shared socket
+// to be both.
 const _: () = {
     const fn assert_send<T: Send>() {}
-    assert_send::<XdpSocket>();
+    assert_send::<XdpSender>();
+    assert_send::<XdpReceiver>();
     assert_send::<FramePool>();
     assert_send::<Umem>();
 };

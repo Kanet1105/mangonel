@@ -1,4 +1,7 @@
-use std::ptr::{NonNull, null_mut};
+use std::{
+    ptr::{NonNull, null_mut},
+    sync::Arc,
+};
 
 use libc::{MSG_DONTWAIT, POLLIN, SOL_XDP, getsockopt, poll, pollfd, sendto};
 use mangonel_libxdp_sys::{
@@ -12,11 +15,59 @@ use crate::{
     umem::Umem,
 };
 
+/// Wraps a bound socket and its rings into the two halves
+/// that drive it. `umem` is what the socket's frames live
+/// in; held so it cannot be freed first.
+pub(crate) fn split(
+    socket: NonNull<xsk_socket>,
+    rx_ring: Consumer,
+    tx_ring: Producer,
+    fill_ring: Producer,
+    completion_ring: Consumer,
+    umem: Umem,
+) -> (XdpSender, XdpReceiver) {
+    let socket = Arc::new(XdpSocket {
+        socket,
+        rx_ring,
+        tx_ring,
+        fill_ring,
+        completion_ring,
+        umem,
+    });
+
+    (
+        XdpSender {
+            socket: socket.clone(),
+        },
+        XdpReceiver { socket },
+    )
+}
+
+/// The transmit half of one bound AF_XDP queue: drives
+/// its tx and completion rings. Not `Clone`, so those
+/// rings have one driver. Made by [`crate::bind`] or
+/// [`crate::bind_shared`]; the socket stays bound until
+/// both halves drop.
+pub struct XdpSender {
+    socket: Arc<XdpSocket>,
+}
+
+/// The receive half of one bound AF_XDP queue: drives
+/// its rx and fill rings. Not `Clone`, so those rings
+/// have one driver. Made alongside [`XdpSender`].
+pub struct XdpReceiver {
+    socket: Arc<XdpSocket>,
+}
+
 /// One bound AF_XDP queue: receive and transmit over its
 /// four rings, recycling frames through the umem's shared
-/// [`FramePool`]. Not `Clone` and not `Sync`: one worker
-/// thread owns the socket, so each ring has one driver.
-pub struct XdpSocket {
+/// [`FramePool`]. Private: it is only ever driven through
+/// the [`XdpSender`] and [`XdpReceiver`] halves that share
+/// it, whose `&mut self` methods are what give each ring a
+/// single driver. Deleted when the last half drops, with
+/// every ring alive: libxdp dereferences all four while
+/// deleting.
+struct XdpSocket {
     socket: NonNull<xsk_socket>,
     rx_ring: Consumer,
     tx_ring: Producer,
@@ -26,46 +77,70 @@ pub struct XdpSocket {
     umem: Umem,
 }
 
-// SAFETY: A raw socket pointer and rings, none with thread
-// affinity; never shared, so each ring has a single driver.
+// SAFETY: The socket pointer and rings have no thread
+// affinity; the socket is only read for its fd, whose
+// syscalls are thread-safe. The rings are driven only
+// through the halves: rx and fill by `XdpReceiver`, tx and
+// completion by `XdpSender`, each via `&mut self` on a
+// non-`Clone` type, so no ring is touched from two threads
+// at once even when the halves live on different ones. The
+// type is private, so no other `&XdpSocket` exists. The
+// umem synchronizes itself.
 unsafe impl Send for XdpSocket {}
+unsafe impl Sync for XdpSocket {}
 
 impl Drop for XdpSocket {
     fn drop(&mut self) {
-        // Runs before the `umem` field drops, so every
-        // xsk_socket__delete precedes the xsk_umem__delete.
+        // Runs before the fields drop, so the delete sees
+        // every ring alive and precedes the xsk_umem__delete.
         unsafe { xsk_socket__delete(self.socket.as_ptr()) }
     }
 }
 
-impl XdpSocket {
-    pub(crate) fn new(
-        socket: NonNull<xsk_socket>,
-        rx_ring: Consumer,
-        tx_ring: Producer,
-        fill_ring: Producer,
-        completion_ring: Consumer,
-        umem: Umem,
-    ) -> Self {
-        Self {
-            socket,
-            rx_ring,
-            tx_ring,
-            fill_ring,
-            completion_ring,
-            umem,
-        }
-    }
-
+impl XdpSender {
     /// The umem the socket's frames live in — what
     /// [`crate::bind_shared`] clones into its new socket.
     pub(crate) fn umem(&self) -> &Umem {
-        &self.umem
+        &self.socket.umem
     }
 
     /// Whether the kernel bound this socket zero-copy. A
     /// failed getsockopt counts as no.
     pub fn is_zero_copy(&self) -> bool {
+        self.socket.is_zero_copy()
+    }
+
+    /// Consumes the front of `buffer`, queueing live
+    /// descriptors for transmit and passing empty slots
+    /// through; returns the consumed count — retry with
+    /// the unconsumed tail. Panics on a descriptor from a
+    /// different umem.
+    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
+    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        self.socket.send(buffer)
+    }
+}
+
+impl XdpReceiver {
+    /// As [`XdpSender::is_zero_copy`].
+    pub fn is_zero_copy(&self) -> bool {
+        self.socket.is_zero_copy()
+    }
+
+    /// Fills the front of `buffer` with one minted
+    /// descriptor per received frame; returns the count.
+    /// Overwriting a slot that still holds a live
+    /// descriptor leaks its frame — consume slots first.
+    #[must_use = "the count says how many descriptors were filled with received frames"]
+    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        self.socket.receive(buffer)
+    }
+}
+
+impl XdpSocket {
+    /// Whether the kernel bound this socket zero-copy. A
+    /// failed getsockopt counts as no.
+    fn is_zero_copy(&self) -> bool {
         let mut options = xdp_options { flags: 0 };
         let mut length = libc::socklen_t::try_from(size_of::<xdp_options>())
             .expect("xdp_options size overflows socklen_t. This is a bug.");
@@ -82,12 +157,10 @@ impl XdpSocket {
         value == 0 && options.flags & XDP_OPTIONS_ZEROCOPY != 0
     }
 
-    /// Fills the front of `buffer` with one minted
-    /// descriptor per received frame; returns the count.
-    /// Overwriting a slot that still holds a live
-    /// descriptor leaks its frame — consume slots first.
-    #[must_use = "the count says how many descriptors were filled with received frames"]
-    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+    /// Backs [`XdpReceiver::receive`]. `&self` only because
+    /// the halves share this socket; the receiver's
+    /// `&mut self` is the exclusivity.
+    fn receive(&self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
             .unwrap_or(u32::MAX)
             .min(self.rx_ring.size());
@@ -118,13 +191,9 @@ impl XdpSocket {
         offset
     }
 
-    /// Consumes the front of `buffer`, queueing live
-    /// descriptors for transmit and passing empty slots
-    /// through; returns the consumed count — retry with
-    /// the unconsumed tail. Panics on a descriptor from a
-    /// different umem.
-    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
-    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+    /// Backs [`XdpSender::send`]; `&self` as
+    /// [`Self::receive`].
+    fn send(&self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
             .unwrap_or(u32::MAX)
             .min(self.tx_ring.size());
@@ -176,7 +245,7 @@ impl XdpSocket {
     }
 
     /// Tops the fill ring up from the umem's pool.
-    fn fill(&mut self) {
+    fn fill(&self) {
         // Clamp to the ring's free space: an unclamped
         // all-or-nothing claim would starve RX in bursts.
         let ring_size = self.fill_ring.size();
@@ -205,7 +274,7 @@ impl XdpSocket {
     }
 
     /// Returns every completed tx frame to the umem's pool.
-    fn complete(&mut self) {
+    fn complete(&self) {
         let (filled, index) = self.completion_ring.claim(self.completion_ring.size());
         if filled == 0 {
             return;
@@ -247,11 +316,11 @@ impl XdpSocket {
     }
 
     /// Wakes the driver; non-blocking, carries no data.
-    fn kick(&mut self) {
+    fn kick(&self) {
         unsafe { sendto(self.socket_fd(), null_mut(), 0, MSG_DONTWAIT, null_mut(), 0) };
     }
 
-    fn poll(&mut self) {
+    fn poll(&self) {
         let mut poll_fd_struct = pollfd {
             fd: self.socket_fd(),
             events: POLLIN,
@@ -260,7 +329,7 @@ impl XdpSocket {
         unsafe { poll(&mut poll_fd_struct, 1, 0) };
     }
 
-    pub(crate) fn socket_fd(&self) -> i32 {
+    fn socket_fd(&self) -> i32 {
         unsafe { xsk_socket__fd(self.socket.as_ptr()) }
     }
 }

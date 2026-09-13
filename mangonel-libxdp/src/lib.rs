@@ -12,5 +12,5 @@ mod umem;
 mod xdp;
 
 pub use descriptor::XdpDescriptor;
-pub use socket::XdpSocket;
+pub use socket::{XdpReceiver, XdpSender};
 pub use xdp::{XdpError, bind, bind_shared};
