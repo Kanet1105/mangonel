@@ -11,7 +11,7 @@ use mangonel_libxdp_sys::{
 use crate::{
     pool::FramePool,
     ring::{Consumer, DEFAULT_RING_SIZE, Producer, RingError, ring_buffer},
-    socket::{XdpReceiver, XdpSender, split},
+    socket::{SocketHalf, XdpReceiver, XdpSender, split},
     umem::{DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, Umem, UmemError},
 };
 
@@ -71,18 +71,20 @@ pub fn bind(
     )
 }
 
-/// Binds one queue sharing `sender`'s umem and frame
+/// Binds one queue sharing `socket`'s umem and frame
 /// pool — what makes zero-copy forwarding between them
-/// sound — and returns its halves as [`bind`] does. Count
-/// every share in the [`bind`] `share_count` that sized
-/// the umem.
-pub fn bind_shared(
+/// sound — and returns its halves as [`bind`] does. Pass
+/// either half of the socket to share with, by reference.
+/// Count every share in the [`bind`] `share_count` that
+/// sized the umem.
+pub fn bind_shared<'a>(
     interface_name: impl AsRef<str>,
     queue_id: u32,
-    sender: &XdpSender,
+    socket: impl Into<SocketHalf<'a>>,
 ) -> Result<(XdpSender, XdpReceiver), XdpError> {
     let (fill, completion) = ring_buffer(DEFAULT_RING_SIZE)?;
     let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
+    let umem = socket.into().umem().clone();
 
     create_socket(
         interface_name.as_ref(),
@@ -91,7 +93,7 @@ pub fn bind_shared(
         tx,
         fill,
         completion,
-        sender.umem().clone(),
+        umem,
     )
 }
 
@@ -154,7 +156,7 @@ fn create_socket(
         completion,
         umem,
     );
-    warn_copy_mode(interface_name, &sender);
+    warn_copy_mode(interface_name, SocketHalf::from(&sender));
 
     Ok((sender, receiver))
 }
@@ -195,8 +197,8 @@ fn setrlimit() -> Result<(), io::Error> {
 
 /// Warns when the socket fell back to copy mode — silent
 /// and an order of magnitude slower if left undetected.
-fn warn_copy_mode(interface_name: &str, sender: &XdpSender) {
-    if !sender.is_zero_copy() {
+fn warn_copy_mode(interface_name: &str, socket: SocketHalf<'_>) {
+    if !socket.is_zero_copy() {
         tracing::warn!(
             interface = interface_name,
             "driver lacks zero-copy support; running in copy mode"

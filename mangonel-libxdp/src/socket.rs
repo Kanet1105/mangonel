@@ -43,6 +43,36 @@ pub(crate) fn split(
     )
 }
 
+pub struct SocketHalf<'a> {
+    socket: &'a Arc<XdpSocket>,
+}
+
+impl<'a> From<&'a XdpSender> for SocketHalf<'a> {
+    fn from(value: &'a XdpSender) -> Self {
+        Self {
+            socket: &value.socket,
+        }
+    }
+}
+
+impl<'a> From<&'a XdpReceiver> for SocketHalf<'a> {
+    fn from(value: &'a XdpReceiver) -> Self {
+        Self {
+            socket: &value.socket,
+        }
+    }
+}
+
+impl<'a> SocketHalf<'a> {
+    pub(crate) fn umem(&self) -> &Umem {
+        &self.socket.umem
+    }
+
+    pub fn is_zero_copy(&self) -> bool {
+        self.socket.is_zero_copy()
+    }
+}
+
 /// The transmit half of one bound AF_XDP queue: drives
 /// its tx and completion rings. Not `Clone`, so those
 /// rings have one driver. Made by [`crate::bind`] or
@@ -52,11 +82,34 @@ pub struct XdpSender {
     socket: Arc<XdpSocket>,
 }
 
+impl XdpSender {
+    /// Consumes the front of `buffer`, queueing live
+    /// descriptors for transmit and passing empty slots
+    /// through; returns the consumed count — retry with
+    /// the unconsumed tail. Panics on a descriptor from a
+    /// different umem.
+    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
+    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        self.socket.send(buffer)
+    }
+}
+
 /// The receive half of one bound AF_XDP queue: drives
 /// its rx and fill rings. Not `Clone`, so those rings
 /// have one driver. Made alongside [`XdpSender`].
 pub struct XdpReceiver {
     socket: Arc<XdpSocket>,
+}
+
+impl XdpReceiver {
+    /// Fills the front of `buffer` with one minted
+    /// descriptor per received frame; returns the count.
+    /// Overwriting a slot that still holds a live
+    /// descriptor leaks its frame — consume slots first.
+    #[must_use = "the count says how many descriptors were filled with received frames"]
+    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        self.socket.receive(buffer)
+    }
 }
 
 /// One bound AF_XDP queue: receive and transmit over its
@@ -94,46 +147,6 @@ impl Drop for XdpSocket {
         // Runs before the fields drop, so the delete sees
         // every ring alive and precedes the xsk_umem__delete.
         unsafe { xsk_socket__delete(self.socket.as_ptr()) }
-    }
-}
-
-impl XdpSender {
-    /// The umem the socket's frames live in — what
-    /// [`crate::bind_shared`] clones into its new socket.
-    pub(crate) fn umem(&self) -> &Umem {
-        &self.socket.umem
-    }
-
-    /// Whether the kernel bound this socket zero-copy. A
-    /// failed getsockopt counts as no.
-    pub fn is_zero_copy(&self) -> bool {
-        self.socket.is_zero_copy()
-    }
-
-    /// Consumes the front of `buffer`, queueing live
-    /// descriptors for transmit and passing empty slots
-    /// through; returns the consumed count — retry with
-    /// the unconsumed tail. Panics on a descriptor from a
-    /// different umem.
-    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
-    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
-        self.socket.send(buffer)
-    }
-}
-
-impl XdpReceiver {
-    /// As [`XdpSender::is_zero_copy`].
-    pub fn is_zero_copy(&self) -> bool {
-        self.socket.is_zero_copy()
-    }
-
-    /// Fills the front of `buffer` with one minted
-    /// descriptor per received frame; returns the count.
-    /// Overwriting a slot that still holds a live
-    /// descriptor leaks its frame — consume slots first.
-    #[must_use = "the count says how many descriptors were filled with received frames"]
-    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
-        self.socket.receive(buffer)
     }
 }
 
