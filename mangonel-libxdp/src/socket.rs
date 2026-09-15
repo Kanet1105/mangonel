@@ -43,36 +43,6 @@ pub(crate) fn split(
     )
 }
 
-pub struct SocketHalf<'a> {
-    socket: &'a Arc<XdpSocket>,
-}
-
-impl<'a> From<&'a XdpSender> for SocketHalf<'a> {
-    fn from(value: &'a XdpSender) -> Self {
-        Self {
-            socket: &value.socket,
-        }
-    }
-}
-
-impl<'a> From<&'a XdpReceiver> for SocketHalf<'a> {
-    fn from(value: &'a XdpReceiver) -> Self {
-        Self {
-            socket: &value.socket,
-        }
-    }
-}
-
-impl<'a> SocketHalf<'a> {
-    pub(crate) fn umem(&self) -> &Umem {
-        &self.socket.umem
-    }
-
-    pub fn is_zero_copy(&self) -> bool {
-        self.socket.is_zero_copy()
-    }
-}
-
 /// The transmit half of one bound AF_XDP queue: drives
 /// its tx and completion rings. Not `Clone`, so those
 /// rings have one driver. Made by [`crate::bind`] or
@@ -110,6 +80,57 @@ impl XdpReceiver {
     pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         self.socket.receive(buffer)
     }
+}
+
+pub struct SocketHalf<'a> {
+    socket: &'a Arc<XdpSocket>,
+}
+
+impl<'a> From<&'a XdpSender> for SocketHalf<'a> {
+    fn from(value: &'a XdpSender) -> Self {
+        Self {
+            socket: &value.socket,
+        }
+    }
+}
+
+impl<'a> From<&'a XdpReceiver> for SocketHalf<'a> {
+    fn from(value: &'a XdpReceiver) -> Self {
+        Self {
+            socket: &value.socket,
+        }
+    }
+}
+
+impl<'a> SocketHalf<'a> {
+    pub(crate) fn umem(&self) -> &Umem {
+        &self.socket.umem
+    }
+
+    pub fn config(&self) -> SocketConfig {
+        self.socket.config()
+    }
+}
+
+/// What a bound socket was given: its ring sizes, its
+/// umem's frame layout, and the bind mode the kernel
+/// granted. Fixed for the socket's lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SocketConfig {
+    /// Entries in each of the four rings.
+    pub rx_size: u32,
+    pub tx_size: u32,
+    pub fill_size: u32,
+    pub completion_size: u32,
+    /// Bytes per umem frame, a power of two.
+    pub frame_size: u32,
+    /// Bytes reserved before each frame's packet data.
+    pub frame_headroom: u32,
+    /// Frames in the umem, shared by every socket on it.
+    pub frame_count: u32,
+    /// Whether the driver bound zero-copy rather than
+    /// falling back to copy mode.
+    pub zero_copy: bool,
 }
 
 /// One bound AF_XDP queue: receive and transmit over its
@@ -151,9 +172,24 @@ impl Drop for XdpSocket {
 }
 
 impl XdpSocket {
-    /// Whether the kernel bound this socket zero-copy. A
-    /// failed getsockopt counts as no.
-    fn is_zero_copy(&self) -> bool {
+    /// Zero-copy is asked of the kernel each call; a failed
+    /// getsockopt counts as no.
+    fn config(&self) -> SocketConfig {
+        let umem = self.umem.config();
+
+        SocketConfig {
+            rx_size: self.rx_ring.size(),
+            tx_size: self.tx_ring.size(),
+            fill_size: self.fill_ring.size(),
+            completion_size: self.completion_ring.size(),
+            frame_size: umem.frame_size,
+            frame_headroom: umem.frame_headroom,
+            frame_count: self.umem.frame_count(),
+            zero_copy: self.zero_copy(),
+        }
+    }
+
+    fn zero_copy(&self) -> bool {
         let mut options = xdp_options { flags: 0 };
         let mut length = libc::socklen_t::try_from(size_of::<xdp_options>())
             .expect("xdp_options size overflows socklen_t. This is a bug.");
