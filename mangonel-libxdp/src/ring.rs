@@ -159,7 +159,8 @@ impl Consumer {
         unsafe { xsk_ring_cons__rx_desc(self.as_ptr(), index).read() }
     }
 
-    /// Copies the address out; as [`Self::read_descriptor`].
+    /// Copies the address out; as
+    /// [`Self::read_descriptor`].
     pub fn read_completion_address(&self, index: u32) -> u64 {
         // SAFETY: As above, for the completion ring.
         unsafe { xsk_ring_cons__comp_addr(self.as_ptr(), index).read() }
