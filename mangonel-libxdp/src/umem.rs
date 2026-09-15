@@ -23,9 +23,9 @@ use crate::{
 };
 
 // Also the minimum frame size.
-pub const DEFAULT_FRAME_SIZE: u32 = XSK_UMEM__DEFAULT_FRAME_SIZE;
+pub(crate) const DEFAULT_FRAME_SIZE: u32 = XSK_UMEM__DEFAULT_FRAME_SIZE;
 
-pub const DEFAULT_FRAME_HEADROOM: u32 = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
+pub(crate) const DEFAULT_FRAME_HEADROOM: u32 = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
 
 /// The huge page size in bytes, from /proc/meminfo. `None`
 /// when the kernel exposes no huge page support.
@@ -46,7 +46,7 @@ fn max_frame_size() -> u32 {
 static NEXT_UMEM_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Clone)]
-pub struct Umem {
+pub(crate) struct Umem {
     inner: Arc<UmemInner>,
 }
 
@@ -186,6 +186,13 @@ impl Umem {
 
     pub(crate) fn config(&self) -> &xsk_umem_config {
         &self.inner.config
+    }
+
+    /// Frames the area holds; the umem is sized in whole
+    /// frames, so this is exact.
+    pub(crate) fn frame_count(&self) -> u32 {
+        u32::try_from(self.inner.area.length / self.inner.config.frame_size as usize)
+            .expect("The umem frame count overflows u32. This is a bug.")
     }
 
     /// Process-unique id carried by every `XdpDescriptor`

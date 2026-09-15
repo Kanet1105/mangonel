@@ -4,6 +4,8 @@
 //! invariants are panics, checked once at the boundary
 //! that establishes them.
 
+#![warn(unreachable_pub)]
+
 mod descriptor;
 mod pool;
 mod ring;
@@ -12,5 +14,5 @@ mod umem;
 mod xdp;
 
 pub use descriptor::XdpDescriptor;
-pub use socket::{SocketHalf, XdpReceiver, XdpSender};
+pub use socket::{SocketConfig, SocketHalf, XdpReceiver, XdpSender};
 pub use xdp::{XdpError, bind, bind_shared};

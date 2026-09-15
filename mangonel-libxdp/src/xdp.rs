@@ -198,7 +198,7 @@ fn setrlimit() -> Result<(), io::Error> {
 /// Warns when the socket fell back to copy mode — silent
 /// and an order of magnitude slower if left undetected.
 fn warn_copy_mode(interface_name: &str, socket: SocketHalf<'_>) {
-    if !socket.is_zero_copy() {
+    if !socket.config().zero_copy {
         tracing::warn!(
             interface = interface_name,
             "driver lacks zero-copy support; running in copy mode"

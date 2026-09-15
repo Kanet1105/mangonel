@@ -13,7 +13,7 @@ use std::{
 /// commits land in claim order, so an uncommitted grant
 /// stalls the ring. Clones share one ring.
 #[derive(Clone)]
-pub struct FramePool {
+pub(crate) struct FramePool {
     inner: Arc<PoolInner>,
 }
 
@@ -40,7 +40,7 @@ unsafe impl Send for PoolInner {}
 unsafe impl Sync for PoolInner {}
 
 impl FramePool {
-    pub fn new(size: usize) -> Self {
+    pub(crate) fn new(size: usize) -> Self {
         assert!(
             size.is_power_of_two() && size <= 1 << 30,
             "The pool size '{size}' is not a power of two within 2^30."
@@ -75,7 +75,7 @@ impl FramePool {
     /// All-or-nothing: grants the whole burst (capped at
     /// the ring size) or `None`. `write_at` every granted
     /// index, then `commit_write` the grant.
-    pub fn claim_write(&self, size: u32) -> Option<(u32, u32)> {
+    pub(crate) fn claim_write(&self, size: u32) -> Option<(u32, u32)> {
         if size == 0 {
             return None;
         }
@@ -109,7 +109,7 @@ impl FramePool {
     }
 
     /// Invisible to consumers until `commit_write`.
-    pub fn write_at(&self, index: usize, value: u64) {
+    pub(crate) fn write_at(&self, index: usize, value: u64) {
         // SAFETY: The slot is owned by this producer between
         // claim_write and commit_write.
         unsafe { *self.slot(Self::position(index)) = value };
@@ -117,7 +117,7 @@ impl FramePool {
 
     /// Publishes a write grant; `(index, size)` must match
     /// the claim. Waits for earlier grants to commit.
-    pub fn commit_write(&self, index: usize, size: u32) {
+    pub(crate) fn commit_write(&self, index: usize, size: u32) {
         let index = Self::position(index);
         while self.inner.producer_tail.load(Ordering::Acquire) != index {
             std::hint::spin_loop();
@@ -131,7 +131,7 @@ impl FramePool {
     /// Grants up to `size` committed positions, or `None`.
     /// `read_at` every granted index, then `commit_read`
     /// the grant.
-    pub fn claim_read(&self, size: u32) -> Option<(u32, u32)> {
+    pub(crate) fn claim_read(&self, size: u32) -> Option<(u32, u32)> {
         if size == 0 {
             return None;
         }
@@ -164,7 +164,7 @@ impl FramePool {
     }
 
     /// Owned by this consumer until `commit_read`.
-    pub fn read_at(&self, index: usize) -> u64 {
+    pub(crate) fn read_at(&self, index: usize) -> u64 {
         // SAFETY: The slot is owned by this consumer between
         // claim_read and commit_read.
         unsafe { *self.slot(Self::position(index)) }
@@ -173,7 +173,7 @@ impl FramePool {
     /// Frees a read grant for producers; `(index, size)`
     /// must match the claim. Waits for earlier grants to
     /// commit.
-    pub fn commit_read(&self, index: usize, size: u32) {
+    pub(crate) fn commit_read(&self, index: usize, size: u32) {
         let index = Self::position(index);
         while self.inner.consumer_tail.load(Ordering::Acquire) != index {
             std::hint::spin_loop();
