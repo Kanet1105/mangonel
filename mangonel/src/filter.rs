@@ -2,7 +2,7 @@
 //! edits rules, workers check packets through lock-free
 //! [`FilterReader`]s over left-right.
 
-use std::{net::Ipv4Addr, ops::RangeInclusive};
+use std::{net::IpAddr, ops::RangeInclusive};
 
 use left_right::{Absorb, ReadGuard, ReadHandle, WriteHandle};
 
@@ -19,31 +19,26 @@ pub enum Action {
     Deny,
 }
 
+/// An IPv4 or IPv6 network; matches only its own family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Prefix {
-    addr: Ipv4Addr,
+    addr: IpAddr,
     len: u8,
 }
 
 impl Prefix {
-    pub const ANY: Self = Self {
-        addr: Ipv4Addr::UNSPECIFIED,
-        len: 0,
-    };
-
     /// Host bits of `addr` are cleared.
-    pub fn new(addr: Ipv4Addr, len: u8) -> Result<Self, FilterError> {
-        if len > 32 {
-            return Err(FilterError::PrefixLength(len));
-        }
+    pub fn new(addr: impl Into<IpAddr>, len: u8) -> Result<Self, FilterError> {
+        let addr = match addr.into() {
+            IpAddr::V4(addr) if len <= 32 => IpAddr::V4(mask4(addr.into(), len).into()),
+            IpAddr::V6(addr) if len <= 128 => IpAddr::V6(mask6(addr.into(), len).into()),
+            _ => return Err(FilterError::PrefixLength(len)),
+        };
 
-        Ok(Self {
-            addr: mask(u32::from(addr), len).into(),
-            len,
-        })
+        Ok(Self { addr, len })
     }
 
-    pub fn addr(&self) -> Ipv4Addr {
+    pub fn addr(&self) -> IpAddr {
         self.addr
     }
 
@@ -51,16 +46,25 @@ impl Prefix {
         self.len
     }
 
-    pub fn contains(&self, addr: Ipv4Addr) -> bool {
-        mask(u32::from(addr), self.len) == u32::from(self.addr)
+    pub fn contains(&self, addr: IpAddr) -> bool {
+        match (self.addr, addr) {
+            (IpAddr::V4(prefix), IpAddr::V4(addr)) => {
+                mask4(addr.into(), self.len) == u32::from(prefix)
+            }
+            (IpAddr::V6(prefix), IpAddr::V6(addr)) => {
+                mask6(addr.into(), self.len) == u128::from(prefix)
+            }
+            _ => false,
+        }
     }
 }
 
-/// What a rule matches; `None` and full ranges match anything.
+/// What a rule matches; `None` and full ranges match
+/// anything, in either address family.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
-    pub source: Prefix,
-    pub destination: Prefix,
+    pub source: Option<Prefix>,
+    pub destination: Option<Prefix>,
     pub protocol: Option<u8>,
     pub source_port: RangeInclusive<u16>,
     pub destination_port: RangeInclusive<u16>,
@@ -71,8 +75,8 @@ impl Rule {
     /// Matches every packet.
     pub fn any(action: Action) -> Self {
         Self {
-            source: Prefix::ANY,
-            destination: Prefix::ANY,
+            source: None,
+            destination: None,
             protocol: None,
             source_port: 0..=u16::MAX,
             destination_port: 0..=u16::MAX,
@@ -83,19 +87,24 @@ impl Rule {
     fn matches(&self, packet: &Packet) -> bool {
         self.protocol
             .is_none_or(|protocol| protocol == packet.protocol)
-            && self.source.contains(packet.source)
-            && self.destination.contains(packet.destination)
+            && self
+                .source
+                .is_none_or(|prefix| prefix.contains(packet.source))
+            && self
+                .destination
+                .is_none_or(|prefix| prefix.contains(packet.destination))
             && self.source_port.contains(&packet.source_port)
             && self.destination_port.contains(&packet.destination_port)
     }
 }
 
 /// The fields a packet is filtered on. Ports are zero for
-/// protocols without them.
+/// protocols without them; `protocol` is the IPv4 protocol
+/// or the IPv6 next header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Packet {
-    pub source: Ipv4Addr,
-    pub destination: Ipv4Addr,
+    pub source: IpAddr,
+    pub destination: IpAddr,
     pub protocol: u8,
     pub source_port: u16,
     pub destination_port: u16,
@@ -107,7 +116,7 @@ pub struct RuleId(u64);
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum FilterError {
-    #[error("The prefix length '{0}' exceeds 32.")]
+    #[error("The prefix length '{0}' exceeds the address width.")]
     PrefixLength(u8),
     #[error("No rule with id {0:?} in that direction.")]
     UnknownRule(RuleId),
@@ -269,12 +278,20 @@ impl Snapshot<'_> {
     }
 }
 
-fn mask(addr: u32, len: u8) -> u32 {
+fn mask4(addr: u32, len: u8) -> u32 {
     if len == 0 {
         return 0;
     }
 
     addr & (u32::MAX << (32 - len))
+}
+
+fn mask6(addr: u128, len: u8) -> u128 {
+    if len == 0 {
+        return 0;
+    }
+
+    addr & (u128::MAX << (128 - len))
 }
 
 #[derive(Clone, Default)]
@@ -397,7 +414,7 @@ mod tests {
     const TCP: u8 = 6;
     const UDP: u8 = 17;
 
-    fn ip(s: &str) -> Ipv4Addr {
+    fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
     }
 
@@ -413,7 +430,7 @@ mod tests {
 
     fn deny_ssh_from(source: &str) -> Rule {
         Rule {
-            source: Prefix::new(ip(source), 24).unwrap(),
+            source: Some(Prefix::new(ip(source), 24).unwrap()),
             protocol: Some(TCP),
             destination_port: 22..=22,
             ..Rule::any(Action::Deny)
@@ -427,11 +444,53 @@ mod tests {
         assert_eq!(prefix.length(), 16);
         assert!(prefix.contains(ip("10.1.255.255")));
         assert!(!prefix.contains(ip("10.2.0.0")));
-        assert!(Prefix::ANY.contains(ip("255.255.255.255")));
+        assert!(!prefix.contains(ip("::ffff:10.1.0.1")));
+        assert!(
+            Prefix::new(ip("0.0.0.0"), 0)
+                .unwrap()
+                .contains(ip("255.255.255.255"))
+        );
         assert_eq!(
             Prefix::new(ip("10.0.0.0"), 33),
             Err(FilterError::PrefixLength(33))
         );
+    }
+
+    #[test]
+    fn prefix_v6_masks_and_contains() {
+        let prefix = Prefix::new(ip("2001:db8:1:2:3::ffff"), 48).unwrap();
+        assert_eq!(prefix.addr(), ip("2001:db8:1::"));
+        assert!(prefix.contains(ip("2001:db8:1:ffff::1")));
+        assert!(!prefix.contains(ip("2001:db8:2::1")));
+        assert!(!prefix.contains(ip("10.1.0.1")));
+        let host = Prefix::new(ip("2001:db8::1"), 128).unwrap();
+        assert!(host.contains(ip("2001:db8::1")));
+        assert!(!host.contains(ip("2001:db8::2")));
+        assert!(Prefix::new(ip("::"), 0).unwrap().contains(ip("ff02::1")));
+        assert_eq!(
+            Prefix::new(ip("2001:db8::"), 129),
+            Err(FilterError::PrefixLength(129))
+        );
+    }
+
+    #[test]
+    fn families_share_a_chain() {
+        let mut filter = Filter::new();
+        let reader = filter.reader();
+        filter.insert(
+            Direction::Ingress,
+            Rule {
+                source: Some(Prefix::new(ip("2001:db8::"), 32).unwrap()),
+                ..Rule::any(Action::Deny)
+            },
+        );
+        filter.insert(Direction::Ingress, Rule::any(Action::Allow));
+        let v6_in = packet("2001:db8::9", "2001:db8:ff::1", TCP, 443);
+        let v6_out = packet("2001:db9::9", "2001:db8:ff::1", TCP, 443);
+        let v4 = packet("10.0.0.9", "10.0.0.1", TCP, 443);
+        assert_eq!(reader.check(Direction::Ingress, &v6_in), Action::Deny);
+        assert_eq!(reader.check(Direction::Ingress, &v6_out), Action::Allow);
+        assert_eq!(reader.check(Direction::Ingress, &v4), Action::Allow);
     }
 
     #[test]
