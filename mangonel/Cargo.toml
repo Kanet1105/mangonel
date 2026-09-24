@@ -5,6 +5,8 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
+left-right = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true
