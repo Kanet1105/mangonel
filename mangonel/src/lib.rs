@@ -2,3 +2,4 @@
 
 pub mod filter;
 pub mod prefix;
+pub mod wire;

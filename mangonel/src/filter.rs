@@ -5,14 +5,13 @@
 
 use std::{
     collections::HashMap,
-    net::IpAddr,
     ops::RangeInclusive,
     time::{Duration, Instant},
 };
 
 use left_right::{Absorb, ReadGuard, ReadHandle, WriteHandle};
 
-pub use crate::prefix::Prefix;
+pub use crate::{prefix::Prefix, wire::Tuple};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -65,30 +64,18 @@ impl Rule {
         }
     }
 
-    fn matches(&self, packet: &Packet) -> bool {
+    fn matches(&self, tuple: &Tuple) -> bool {
         self.protocol
-            .is_none_or(|protocol| protocol == packet.protocol)
+            .is_none_or(|protocol| protocol == tuple.protocol)
             && self
                 .source
-                .is_none_or(|prefix| prefix.contains(packet.source))
+                .is_none_or(|prefix| prefix.contains(tuple.source))
             && self
                 .destination
-                .is_none_or(|prefix| prefix.contains(packet.destination))
-            && self.source_port.contains(&packet.source_port)
-            && self.destination_port.contains(&packet.destination_port)
+                .is_none_or(|prefix| prefix.contains(tuple.destination))
+            && self.source_port.contains(&tuple.source_port)
+            && self.destination_port.contains(&tuple.destination_port)
     }
-}
-
-/// The fields a packet is filtered on. Ports are zero for
-/// protocols without them; `protocol` is the IPv4 protocol
-/// or the IPv6 next header.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Packet {
-    pub source: IpAddr,
-    pub destination: IpAddr,
-    pub protocol: u8,
-    pub source_port: u16,
-    pub destination_port: u16,
 }
 
 /// Unique for the lifetime of the [`Filter`] that issued it.
@@ -258,9 +245,9 @@ impl FilterReader {
     }
 
     /// Fails closed once the [`Filter`] is dropped.
-    pub fn check(&mut self, direction: Direction, packet: &Packet, now: Instant) -> Action {
+    pub fn check(&mut self, direction: Direction, tuple: &Tuple, now: Instant) -> Action {
         self.snapshot().map_or(Action::Deny, |mut snapshot| {
-            snapshot.check(direction, packet, now)
+            snapshot.check(direction, tuple, now)
         })
     }
 }
@@ -272,10 +259,10 @@ pub struct Snapshot<'a> {
 
 impl Snapshot<'_> {
     /// First matching rule wins, else the direction's default.
-    pub fn check(&mut self, direction: Direction, packet: &Packet, now: Instant) -> Action {
+    pub fn check(&mut self, direction: Direction, tuple: &Tuple, now: Instant) -> Action {
         let chain = self.guard.chain(direction);
         for (id, rule) in &chain.rules {
-            if !rule.matches(packet) {
+            if !rule.matches(tuple) {
                 continue;
             }
             if let Some(limit) = rule.limit
@@ -468,7 +455,7 @@ impl Absorb<Op> for Table {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{net::IpAddr, thread};
 
     use super::*;
 
@@ -479,8 +466,8 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn packet(source: &str, destination: &str, protocol: u8, destination_port: u16) -> Packet {
-        Packet {
+    fn packet(source: &str, destination: &str, protocol: u8, destination_port: u16) -> Tuple {
+        Tuple {
             source: ip(source),
             destination: ip(destination),
             protocol,
