@@ -11,7 +11,7 @@ use mangonel_libxdp_sys::{
 use crate::{
     pool::FramePool,
     ring::{Consumer, DEFAULT_RING_SIZE, Producer, RingError, ring_buffer},
-    socket::{SocketHalf, XdpReceiver, XdpSender, split},
+    socket::{XdpReceiver, XdpSender, XdpSocket},
     umem::{DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, Umem, UmemError},
 };
 
@@ -21,15 +21,13 @@ const RINGS_PER_SOCKET: u32 = 4;
 
 /// Binds one queue, with a fresh umem sized for
 /// `share_count` sockets — this one plus every
-/// [`bind_shared`] partner — and returns its transmit and
-/// receive halves, which may run on different threads.
-/// Panics on a zero `share_count`, and on broken
-/// libxdp/kernel contracts.
+/// [`bind_shared`] partner. Panics on a zero
+/// `share_count`, and on broken libxdp/kernel contracts.
 pub fn bind(
     interface_name: impl AsRef<str>,
     queue_id: u32,
     share_count: usize,
-) -> Result<(XdpSender, XdpReceiver), XdpError> {
+) -> Result<XdpSocket, XdpError> {
     assert!(
         share_count > 0,
         "The share count '{share_count}' sizes a umem for no sockets."
@@ -73,18 +71,16 @@ pub fn bind(
 
 /// Binds one queue sharing `socket`'s umem and frame
 /// pool — what makes zero-copy forwarding between them
-/// sound — and returns its halves as [`bind`] does. Pass
-/// either half of the socket to share with, by reference.
-/// Count every share in the [`bind`] `share_count` that
-/// sized the umem.
-pub fn bind_shared<'a>(
+/// sound. Count every share in the [`bind`] `share_count`
+/// that sized the umem.
+pub fn bind_shared(
     interface_name: impl AsRef<str>,
     queue_id: u32,
-    socket: impl Into<SocketHalf<'a>>,
-) -> Result<(XdpSender, XdpReceiver), XdpError> {
+    socket: &XdpSocket,
+) -> Result<XdpSocket, XdpError> {
     let (fill, completion) = ring_buffer(DEFAULT_RING_SIZE)?;
     let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
-    let umem = socket.into().umem().clone();
+    let umem = socket.umem().clone();
 
     create_socket(
         interface_name.as_ref(),
@@ -109,7 +105,7 @@ fn create_socket(
     fill: Producer,
     completion: Consumer,
     umem: Umem,
-) -> Result<(XdpSender, XdpReceiver), XdpError> {
+) -> Result<XdpSocket, XdpError> {
     let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config();
 
@@ -147,7 +143,7 @@ fn create_socket(
         "xsk_socket__create_shared left a ring unpopulated. This is a bug."
     );
 
-    let (sender, receiver) = split(
+    let socket = XdpSocket::new(
         NonNull::new(socket)
             .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
         rx,
@@ -156,9 +152,9 @@ fn create_socket(
         completion,
         umem,
     );
-    warn_copy_mode(interface_name, SocketHalf::from(&sender));
+    warn_copy_mode(interface_name, &socket);
 
-    Ok((sender, receiver))
+    Ok(socket)
 }
 
 /// Zero flags: native attach and zero-copy with fallback.
@@ -197,7 +193,7 @@ fn setrlimit() -> Result<(), io::Error> {
 
 /// Warns when the socket fell back to copy mode — silent
 /// and an order of magnitude slower if left undetected.
-fn warn_copy_mode(interface_name: &str, socket: SocketHalf<'_>) {
+fn warn_copy_mode(interface_name: &str, socket: &XdpSocket) {
     if !socket.config().zero_copy {
         tracing::warn!(
             interface = interface_name,
@@ -254,6 +250,7 @@ impl From<UmemError> for XdpError {
 // to be both.
 const _: () = {
     const fn assert_send<T: Send>() {}
+    assert_send::<XdpSocket>();
     assert_send::<XdpSender>();
     assert_send::<XdpReceiver>();
     assert_send::<FramePool>();

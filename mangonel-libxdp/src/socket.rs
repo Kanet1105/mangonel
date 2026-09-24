@@ -1,4 +1,6 @@
 use std::{
+    cell::Cell,
+    marker::PhantomData,
     ptr::{NonNull, null_mut},
     sync::Arc,
 };
@@ -15,41 +17,79 @@ use crate::{
     umem::Umem,
 };
 
-/// Wraps a bound socket and its rings into the two halves
-/// that drive it. `umem` is what the socket's frames live
-/// in; held so it cannot be freed first.
-pub(crate) fn split(
-    socket: NonNull<xsk_socket>,
-    rx_ring: Consumer,
-    tx_ring: Producer,
-    fill_ring: Producer,
-    completion_ring: Consumer,
-    umem: Umem,
-) -> (XdpSender, XdpReceiver) {
-    let socket = Arc::new(XdpSocket {
-        socket,
-        rx_ring,
-        tx_ring,
-        fill_ring,
-        completion_ring,
-        umem,
-    });
+/// One bound AF_XDP queue, made by [`crate::bind`] or
+/// [`crate::bind_shared`]. Drive it whole from one thread,
+/// or [`Self::split`] it into halves that may run on two.
+/// `!Sync`, so it is owned by one thread until then.
+pub struct XdpSocket {
+    socket: Socket,
+    _not_sync: PhantomData<Cell<()>>,
+}
 
-    (
-        XdpSender {
-            socket: socket.clone(),
-        },
-        XdpReceiver { socket },
-    )
+impl XdpSocket {
+    /// `umem` is what the socket's frames live in; held so
+    /// it cannot be freed first.
+    pub(crate) fn new(
+        socket: NonNull<xsk_socket>,
+        rx_ring: Consumer,
+        tx_ring: Producer,
+        fill_ring: Producer,
+        completion_ring: Consumer,
+        umem: Umem,
+    ) -> Self {
+        Self {
+            socket: Socket {
+                socket,
+                rx_ring,
+                tx_ring,
+                fill_ring,
+                completion_ring,
+                umem,
+            },
+            _not_sync: PhantomData,
+        }
+    }
+
+    /// Splits into the transmit and receive halves, which
+    /// may run on different threads.
+    pub fn split(self) -> (XdpSender, XdpReceiver) {
+        let socket = Arc::new(self.socket);
+
+        (
+            XdpSender {
+                socket: socket.clone(),
+            },
+            XdpReceiver { socket },
+        )
+    }
+
+    /// As [`XdpSender::send`].
+    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
+    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        self.socket.send(buffer)
+    }
+
+    /// As [`XdpReceiver::receive`].
+    #[must_use = "the count says how many descriptors were filled with received frames"]
+    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        self.socket.receive(buffer)
+    }
+
+    pub fn config(&self) -> SocketConfig {
+        self.socket.config()
+    }
+
+    pub(crate) fn umem(&self) -> &Umem {
+        &self.socket.umem
+    }
 }
 
 /// The transmit half of one bound AF_XDP queue: drives
 /// its tx and completion rings. Not `Clone`, so those
-/// rings have one driver. Made by [`crate::bind`] or
-/// [`crate::bind_shared`]; the socket stays bound until
-/// both halves drop.
+/// rings have one driver. Made by [`XdpSocket::split`];
+/// the socket stays bound until both halves drop.
 pub struct XdpSender {
-    socket: Arc<XdpSocket>,
+    socket: Arc<Socket>,
 }
 
 impl XdpSender {
@@ -68,7 +108,7 @@ impl XdpSender {
 /// its rx and fill rings. Not `Clone`, so those rings
 /// have one driver. Made alongside [`XdpSender`].
 pub struct XdpReceiver {
-    socket: Arc<XdpSocket>,
+    socket: Arc<Socket>,
 }
 
 impl XdpReceiver {
@@ -79,36 +119,6 @@ impl XdpReceiver {
     #[must_use = "the count says how many descriptors were filled with received frames"]
     pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         self.socket.receive(buffer)
-    }
-}
-
-pub struct SocketHalf<'a> {
-    socket: &'a Arc<XdpSocket>,
-}
-
-impl<'a> From<&'a XdpSender> for SocketHalf<'a> {
-    fn from(value: &'a XdpSender) -> Self {
-        Self {
-            socket: &value.socket,
-        }
-    }
-}
-
-impl<'a> From<&'a XdpReceiver> for SocketHalf<'a> {
-    fn from(value: &'a XdpReceiver) -> Self {
-        Self {
-            socket: &value.socket,
-        }
-    }
-}
-
-impl<'a> SocketHalf<'a> {
-    pub(crate) fn umem(&self) -> &Umem {
-        &self.socket.umem
-    }
-
-    pub fn config(&self) -> SocketConfig {
-        self.socket.config()
     }
 }
 
@@ -141,7 +151,7 @@ pub struct SocketConfig {
 /// single driver. Deleted when the last half drops, with
 /// every ring alive: libxdp dereferences all four while
 /// deleting.
-struct XdpSocket {
+struct Socket {
     socket: NonNull<xsk_socket>,
     rx_ring: Consumer,
     tx_ring: Producer,
@@ -158,12 +168,14 @@ struct XdpSocket {
 // completion by `XdpSender`, each via `&mut self` on a
 // non-`Clone` type, so no ring is touched from two threads
 // at once even when the halves live on different ones. The
-// type is private, so no other `&XdpSocket` exists. The
-// umem synchronizes itself.
-unsafe impl Send for XdpSocket {}
-unsafe impl Sync for XdpSocket {}
+// type is private, and the unsplit `XdpSocket` that owns
+// it is `!Sync` and drives rings only via `&mut self`, so
+// no other `&Socket` drives a ring. The umem synchronizes
+// itself.
+unsafe impl Send for Socket {}
+unsafe impl Sync for Socket {}
 
-impl Drop for XdpSocket {
+impl Drop for Socket {
     fn drop(&mut self) {
         // Runs before the fields drop, so the delete sees
         // every ring alive and precedes the xsk_umem__delete.
@@ -171,7 +183,7 @@ impl Drop for XdpSocket {
     }
 }
 
-impl XdpSocket {
+impl Socket {
     /// Zero-copy is asked of the kernel each call; a failed
     /// getsockopt counts as no.
     fn config(&self) -> SocketConfig {
