@@ -13,19 +13,18 @@ use libc::{
     mmap, munmap, sysconf,
 };
 use mangonel_libxdp_sys::{
-    XSK_UMEM__DEFAULT_FRAME_HEADROOM, XSK_UMEM__DEFAULT_FRAME_SIZE, xsk_umem, xsk_umem__create,
-    xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
+    xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
 };
 
 use crate::{
     pool::FramePool,
     ring::{Consumer, Producer},
+    xdp::DEFAULT_FRAME_SIZE,
 };
 
-// Also the minimum frame size.
-pub(crate) const DEFAULT_FRAME_SIZE: u32 = XSK_UMEM__DEFAULT_FRAME_SIZE;
-
-pub(crate) const DEFAULT_FRAME_HEADROOM: u32 = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
+/// The most frames a umem may hold: its pool's capacity
+/// cap.
+const MAX_FRAME_COUNT: u32 = 1 << 30;
 
 /// The huge page size in bytes, from /proc/meminfo. `None`
 /// when the kernel exposes no huge page support.
@@ -94,6 +93,15 @@ impl Umem {
             return Err(UmemError::FrameSizeNotPowerOfTwo { frame_size });
         }
 
+        // The pool rounds its capacity up to a power of two
+        // no larger than this.
+        if frame_count == 0 || frame_count > MAX_FRAME_COUNT {
+            return Err(UmemError::FrameCountOutOfRange {
+                frame_count,
+                max: MAX_FRAME_COUNT,
+            });
+        }
+
         let max_frame_size = max_frame_size();
         if frame_size < DEFAULT_FRAME_SIZE || frame_size > max_frame_size {
             return Err(UmemError::FrameSizeOutOfRange {
@@ -107,9 +115,10 @@ impl Umem {
             .checked_mul(frame_count as usize)
             .ok_or(UmemError::AreaTooLarge)?;
 
-        // munmap — in Drop, where failure panics — rejects a
-        // MAP_HUGETLB length that is not a multiple of the
-        // huge page size, though mmap rounds it up itself.
+        // munmap — in Drop, where failure panics — rejects
+        // a MAP_HUGETLB length that is not a
+        // multiple of the huge page size, though
+        // mmap rounds it up itself.
         if use_hugetlb {
             let huge_page_size = huge_page_size().ok_or(UmemError::HugePageSize)?;
             length = length
@@ -148,8 +157,9 @@ impl Umem {
             "xsk_umem__create left a ring unpopulated. This is a bug."
         );
 
-        // Every frame starts in the pool; the capacity rounds
-        // up to the pool's power-of-two requirement.
+        // Every frame starts in the pool; the capacity
+        // rounds up to the pool's power-of-two
+        // requirement.
         let pool = FramePool::new((frame_count as usize).next_power_of_two());
         let (available, index) = pool
             .claim_write(frame_count)
@@ -263,6 +273,8 @@ pub enum UmemError {
     FrameSizeNotPowerOfTwo { frame_size: u32 },
     #[error("The frame size '{frame_size}' is outside the supported range {min}..={max}.")]
     FrameSizeOutOfRange { frame_size: u32, min: u32, max: u32 },
+    #[error("The frame count '{frame_count}' is outside the supported range 1..={max}.")]
+    FrameCountOutOfRange { frame_count: u32, max: u32 },
     #[error("The umem area is too large to address.")]
     AreaTooLarge,
     #[error("Failed to read the huge page size from /proc/meminfo.")]

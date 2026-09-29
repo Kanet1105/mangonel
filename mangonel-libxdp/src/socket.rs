@@ -13,6 +13,7 @@ use crate::{
     pool::FramePool,
     ring::{Consumer, Producer},
     umem::Umem,
+    xdp::XdpConfig,
 };
 
 /// One bound AF_XDP queue, driven from one thread through
@@ -144,22 +145,12 @@ impl XdpReceiver {
     }
 }
 
-/// What a bound socket was given: its ring sizes, its
-/// umem's frame layout, and the bind mode the kernel
+/// What a bound socket was given: the depths and umem
+/// layout it runs with, and the bind mode the kernel
 /// granted. Fixed for the socket's lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SocketConfig {
-    /// Entries in each of the four rings.
-    pub rx_size: u32,
-    pub tx_size: u32,
-    pub fill_size: u32,
-    pub completion_size: u32,
-    /// Bytes per umem frame, a power of two.
-    pub frame_size: u32,
-    /// Bytes reserved before each frame's packet data.
-    pub frame_headroom: u32,
-    /// Frames in the umem, shared by every socket on it.
-    pub frame_count: u32,
+    pub xdp: XdpConfig,
     /// Whether the driver bound zero-copy rather than
     /// falling back to copy mode.
     pub zero_copy: bool,
@@ -193,7 +184,8 @@ unsafe impl Send for Socket {}
 impl Drop for Socket {
     fn drop(&mut self) {
         // Runs before the fields drop, so the delete sees
-        // every ring alive and precedes the xsk_umem__delete.
+        // every ring alive and precedes the
+        // xsk_umem__delete.
         unsafe { xsk_socket__delete(self.socket.as_ptr()) }
     }
 }
@@ -204,14 +196,18 @@ impl Socket {
     fn config(&self) -> SocketConfig {
         let umem = self.umem.config();
 
+        // Each pair is created at one depth.
+        debug_assert_eq!(self.rx_ring.size(), self.fill_ring.size());
+        debug_assert_eq!(self.tx_ring.size(), self.completion_ring.size());
+
         SocketConfig {
-            rx_size: self.rx_ring.size(),
-            tx_size: self.tx_ring.size(),
-            fill_size: self.fill_ring.size(),
-            completion_size: self.completion_ring.size(),
-            frame_size: umem.frame_size,
-            frame_headroom: umem.frame_headroom,
-            frame_count: self.umem.frame_count(),
+            xdp: XdpConfig {
+                receive_depth: self.rx_ring.size(),
+                send_depth: self.tx_ring.size(),
+                frame_size: umem.frame_size,
+                frame_headroom: umem.frame_headroom,
+                frame_count: self.umem.frame_count(),
+            },
             zero_copy: self.zero_copy(),
         }
     }
@@ -248,8 +244,9 @@ impl Socket {
         let mut offset: u32 = 0;
         while offset < available {
             let descriptor = self.rx_ring.read_descriptor(index.wrapping_add(offset));
-            // The one kernel input the slice accessors trust:
-            // a packet crossing its frame boundary would alias
+            // The one kernel input the slice accessors
+            // trust: a packet crossing its
+            // frame boundary would alias
             // other descriptors' frames.
             assert!(
                 (descriptor.addr & frame_mask) + u64::from(descriptor.len) <= frame_mask + 1,
@@ -273,8 +270,9 @@ impl Socket {
         let size = u32::try_from(buffer.len())
             .unwrap_or(u32::MAX)
             .min(self.tx_ring.size());
-        // Validate before claiming: a caught panic after the
-        // claim would desync the producer index for good.
+        // Validate before claiming: a caught panic after
+        // the claim would desync the producer index
+        // for good.
         let umem_id = self.umem.id();
         let mut transmit_count: u32 = 0;
         for descriptor in &buffer[..size as usize] {
@@ -307,7 +305,8 @@ impl Socket {
                     descriptor.length,
                 );
                 written += 1;
-                // Ownership of the frame moved to the tx ring.
+                // Ownership of the frame moved to the tx
+                // ring.
                 descriptor.defuse();
             }
             consumed += 1;
@@ -331,8 +330,8 @@ impl Socket {
             return;
         };
 
-        // The kernel only consumes fill entries, so the free
-        // space checked above cannot shrink.
+        // The kernel only consumes fill entries, so the
+        // free space checked above cannot shrink.
         let (available, index) = self.fill_ring.claim(count);
         assert!(
             available == count,
@@ -378,8 +377,9 @@ impl Socket {
     fn pool_claim_write(pool: &FramePool, size: u32) -> u32 {
         loop {
             if let Some((available, index)) = pool.claim_write(size) {
-                // A capped grant committed at the requested size
-                // would corrupt the pool.
+                // A capped grant committed at the requested
+                // size would corrupt the
+                // pool.
                 assert!(
                     available == size,
                     "The pool capacity is smaller than a burst. This is a bug."

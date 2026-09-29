@@ -1,13 +1,10 @@
 use std::ptr::NonNull;
 
 use mangonel_libxdp_sys::{
-    XSK_RING_PROD__DEFAULT_NUM_DESCS, xdp_desc, xsk_prod_nb_free, xsk_ring_cons,
-    xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release, xsk_ring_cons__rx_desc,
-    xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve, xsk_ring_prod__submit,
-    xsk_ring_prod__tx_desc,
+    xdp_desc, xsk_prod_nb_free, xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek,
+    xsk_ring_cons__release, xsk_ring_cons__rx_desc, xsk_ring_prod, xsk_ring_prod__fill_addr,
+    xsk_ring_prod__reserve, xsk_ring_prod__submit, xsk_ring_prod__tx_desc,
 };
-
-pub(crate) const DEFAULT_RING_SIZE: u32 = XSK_RING_PROD__DEFAULT_NUM_DESCS;
 
 pub(crate) fn ring_buffer(size: u32) -> Result<(Producer, Consumer), RingError> {
     if !size.is_power_of_two() {
@@ -54,9 +51,10 @@ impl Producer {
     /// accessors below are only sound once true; checked
     /// once by whoever registers the ring.
     pub(crate) fn is_registered(&self) -> bool {
-        // SAFETY: The allocation is live for self's lifetime. Read
-        // through the raw pointer: libxdp writes through its
-        // own pointer to this struct.
+        // SAFETY: The allocation is live for self's
+        // lifetime. Read through the raw pointer:
+        // libxdp writes through its own pointer to
+        // this struct.
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
@@ -83,16 +81,17 @@ impl Producer {
     /// aliasing indices would otherwise yield aliasing
     /// `&mut`.
     pub(crate) fn write_descriptor(&self, index: u32, address: u64, length: u32) {
-        // SAFETY: The ring is registered; the index is masked into
-        // range, and the slot is owned by this producer
-        // between claim and commit. No reference outlives
-        // the call.
+        // SAFETY: The ring is registered; the index is
+        // masked into range, and the slot is owned
+        // by this producer between claim and
+        // commit. No reference outlives the call.
         unsafe {
             let slot = xsk_ring_prod__tx_desc(self.as_ptr(), index);
             (*slot).addr = address;
             (*slot).len = length;
-            // The kernel rejects unknown option bits; recycled slot
-            // residue is not trusted to be zero.
+            // The kernel rejects unknown option bits;
+            // recycled slot residue is not
+            // trusted to be zero.
             (*slot).options = 0;
         }
     }
@@ -153,9 +152,10 @@ impl Consumer {
     /// Copies the slot out: the kernel may rewrite it as
     /// soon as `commit` hands it back.
     pub(crate) fn read_descriptor(&self, index: u32) -> xdp_desc {
-        // SAFETY: The ring is registered and the index is masked
-        // into range; an index beyond what claim reported
-        // reads stale data, which is a bug but not unsound.
+        // SAFETY: The ring is registered and the index is
+        // masked into range; an index beyond what
+        // claim reported reads stale data, which is
+        // a bug but not unsound.
         unsafe { xsk_ring_cons__rx_desc(self.as_ptr(), index).read() }
     }
 

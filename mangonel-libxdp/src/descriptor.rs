@@ -67,8 +67,9 @@ impl XdpDescriptor {
 
                 return;
             }
-            // A live frame holds no pool slot, so room exists;
-            // the spin covers another thread's open grant.
+            // A live frame holds no pool slot, so room
+            // exists; the spin covers another
+            // thread's open grant.
             std::hint::spin_loop();
         }
     }
@@ -89,9 +90,10 @@ impl XdpDescriptor {
             .cast::<u8>();
 
         // SAFETY: A live descriptor owns its frame — on no
-        // ring, kernel off it; send needs `&mut self` and is
-        // excluded while the borrow lives. get_data bounds
-        // the range; self's umem handle keeps it mapped.
+        // ring, kernel off it; send needs `&mut self` and
+        // is excluded while the borrow lives.
+        // get_data bounds the range; self's umem
+        // handle keeps it mapped.
         unsafe { std::slice::from_raw_parts(offset, length) }
     }
 
