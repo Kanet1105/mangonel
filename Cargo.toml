@@ -1,11 +1,6 @@
 [workspace]
 resolver = "3"
-members = [
-    "mangonel",
-    "mangonel-libxdp",
-    "mangonel-libxdp-sys",
-    "mangonel-nic",
-]
+members = ["mangonel", "mangonel-libxdp", "mangonel-libxdp-sys", "mangonel-nic"]
 
 # Matches libxdp, which mangonel links against. See LICENSE.
 [workspace.package]

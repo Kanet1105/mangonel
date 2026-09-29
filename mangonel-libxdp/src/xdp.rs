@@ -5,86 +5,136 @@ use std::{
 };
 
 use mangonel_libxdp_sys::{
-    xsk_socket__create_shared, xsk_socket_config, xsk_socket_config__bindgen_ty_1,
+    XSK_RING_PROD__DEFAULT_NUM_DESCS, XSK_UMEM__DEFAULT_FRAME_HEADROOM,
+    XSK_UMEM__DEFAULT_FRAME_SIZE, xsk_socket__create_shared, xsk_socket_config,
+    xsk_socket_config__bindgen_ty_1,
 };
 
 use crate::{
     pool::FramePool,
-    ring::{Consumer, DEFAULT_RING_SIZE, Producer, RingError, ring_buffer},
-    socket::{SocketHalf, XdpReceiver, XdpSender, split},
-    umem::{DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, Umem, UmemError},
+    ring::{Consumer, Producer, RingError, ring_buffer},
+    socket::{XdpReceiver, XdpSender, XdpSocket},
+    umem::{Umem, UmemError},
 };
 
-/// Rings a frame can occupy at once: rx, tx, fill,
-/// completion.
-const RINGS_PER_SOCKET: u32 = 4;
+/// Libxdp's default ring depth, for both directions.
+pub const DEFAULT_RECEIVE_DEPTH: u32 = XSK_RING_PROD__DEFAULT_NUM_DESCS;
+pub const DEFAULT_SEND_DEPTH: u32 = XSK_RING_PROD__DEFAULT_NUM_DESCS;
+/// Libxdp's default frame size, also the smallest one
+/// supported.
+pub const DEFAULT_FRAME_SIZE: u32 = XSK_UMEM__DEFAULT_FRAME_SIZE;
+pub const DEFAULT_FRAME_HEADROOM: u32 = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
 
-/// Binds one queue, with a fresh umem sized for
-/// `share_count` sockets — this one plus every
-/// [`bind_shared`] partner — and returns its transmit and
-/// receive halves, which may run on different threads.
-/// Panics on a zero `share_count`, and on broken
-/// libxdp/kernel contracts.
+/// What [`bind`] asks for: the depth of each direction and
+/// the umem's frame layout. The umem fields hold for every
+/// socket later sharing it through [`bind_shared`], which
+/// also takes the depths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct XdpConfig {
+    /// Packets in flight on receive: sizes the rx and fill
+    /// rings. A power of two.
+    pub receive_depth: u32,
+    /// Packets in flight on send: sizes the tx and
+    /// completion rings. A power of two.
+    pub send_depth: u32,
+    /// Bytes per umem frame: a power of two, from
+    /// [`DEFAULT_FRAME_SIZE`] up to the page size.
+    pub frame_size: u32,
+    /// Bytes reserved before each frame's packet data.
+    pub frame_headroom: u32,
+    /// Frames in the umem, shared by every socket on it:
+    /// 1 to 2^30. [`Self::frames_for`] sizes it so the
+    /// pool never starves.
+    pub frame_count: u32,
+}
+
+impl Default for XdpConfig {
+    /// Libxdp's defaults, with frames for one socket.
+    fn default() -> Self {
+        let mut config = Self {
+            receive_depth: DEFAULT_RECEIVE_DEPTH,
+            send_depth: DEFAULT_SEND_DEPTH,
+            frame_size: DEFAULT_FRAME_SIZE,
+            frame_headroom: DEFAULT_FRAME_HEADROOM,
+            frame_count: 0,
+        };
+        config.frame_count = config
+            .frames_for(1)
+            .expect("The default depths overflow the frame count. This is a bug.");
+
+        config
+    }
+}
+
+impl XdpConfig {
+    /// Frames that fill every ring of `socket_count`
+    /// sockets at these depths at once: the count at which
+    /// the pool never starves. `None` on overflow.
+    pub fn frames_for(&self, socket_count: u32) -> Option<u32> {
+        // Each direction is a pair of rings.
+        self.receive_depth
+            .checked_add(self.send_depth)?
+            .checked_mul(2)?
+            .checked_mul(socket_count)
+    }
+}
+
+/// Binds one queue with a fresh umem laid out by `config`.
+/// [`XdpSocket::split`] it to drive send and receive from
+/// different threads. Panics on broken libxdp/kernel
+/// contracts.
 pub fn bind(
     interface_name: impl AsRef<str>,
     queue_id: u32,
-    share_count: usize,
-) -> Result<(XdpSender, XdpReceiver), XdpError> {
-    assert!(
-        share_count > 0,
-        "The share count '{share_count}' sizes a umem for no sockets."
-    );
+    config: XdpConfig,
+) -> Result<XdpSocket, XdpError> {
+    let interface_name = interface_name.as_ref();
 
     // The umem mapping counts against RLIMIT_MEMLOCK.
     setrlimit().map_err(Error::Setrlimit)?;
 
-    // Every ring of every sharing socket full at once, so
-    // the pool never starves.
-    let frame_count = u32::try_from(share_count)
-        .ok()
-        .and_then(|sockets| sockets.checked_mul(DEFAULT_RING_SIZE))
-        .and_then(|frames| frames.checked_mul(RINGS_PER_SOCKET))
-        .ok_or(Error::TooManySockets { share_count })?;
-
     // Rings before the umem: the umem, dropped first on
     // error paths, is deleted while the fill/completion
-    // pair it saves at creation is alive.
-    let (fill, completion) = ring_buffer(DEFAULT_RING_SIZE)?;
-    let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
+    // pair it saves at creation is alive. Each direction's
+    // two rings share its depth.
+    let (fill, rx) = ring_buffer(config.receive_depth)?;
+    let (tx, completion) = ring_buffer(config.send_depth)?;
     let umem = Umem::new(
-        DEFAULT_FRAME_SIZE,
-        DEFAULT_FRAME_HEADROOM,
-        frame_count,
+        config.frame_size,
+        config.frame_headroom,
+        config.frame_count,
         false,
         &fill,
         &completion,
     )?;
 
-    create_socket(
-        interface_name.as_ref(),
-        queue_id,
-        rx,
-        tx,
-        fill,
-        completion,
-        umem,
-    )
+    // Sound, but the fill ring can never be topped up.
+    if config.frame_count < config.receive_depth {
+        tracing::warn!(
+            interface = interface_name,
+            frame_count = config.frame_count,
+            receive_depth = config.receive_depth,
+            "fewer frames than the receive depth; receive will drop under load"
+        );
+    }
+
+    create_socket(interface_name, queue_id, rx, tx, fill, completion, umem)
 }
 
 /// Binds one queue sharing `socket`'s umem and frame
 /// pool — what makes zero-copy forwarding between them
-/// sound — and returns its halves as [`bind`] does. Pass
-/// either half of the socket to share with, by reference.
-/// Count every share in the [`bind`] `share_count` that
-/// sized the umem.
-pub fn bind_shared<'a>(
+/// sound — at `socket`'s depths. Share before splitting
+/// `socket`. Size the umem's frame count for every
+/// sharer, e.g. with [`XdpConfig::frames_for`].
+pub fn bind_shared(
     interface_name: impl AsRef<str>,
     queue_id: u32,
-    socket: impl Into<SocketHalf<'a>>,
-) -> Result<(XdpSender, XdpReceiver), XdpError> {
-    let (fill, completion) = ring_buffer(DEFAULT_RING_SIZE)?;
-    let (tx, rx) = ring_buffer(DEFAULT_RING_SIZE)?;
-    let umem = socket.into().umem().clone();
+    socket: &XdpSocket,
+) -> Result<XdpSocket, XdpError> {
+    let config = socket.config().xdp;
+    let (fill, rx) = ring_buffer(config.receive_depth)?;
+    let (tx, completion) = ring_buffer(config.send_depth)?;
+    let umem = socket.umem().clone();
 
     create_socket(
         interface_name.as_ref(),
@@ -109,9 +159,9 @@ fn create_socket(
     fill: Producer,
     completion: Consumer,
     umem: Umem,
-) -> Result<(XdpSender, XdpReceiver), XdpError> {
+) -> Result<XdpSocket, XdpError> {
     let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
-    let socket_config = socket_config();
+    let socket_config = socket_config(rx.size(), tx.size());
 
     // The owning socket passes the umem's saved
     // fill/completion pair; a sharing socket passes fresh
@@ -147,7 +197,7 @@ fn create_socket(
         "xsk_socket__create_shared left a ring unpopulated. This is a bug."
     );
 
-    let (sender, receiver) = split(
+    let socket = XdpSocket::new(
         NonNull::new(socket)
             .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
         rx,
@@ -156,19 +206,19 @@ fn create_socket(
         completion,
         umem,
     );
-    warn_copy_mode(interface_name, SocketHalf::from(&sender));
+    warn_copy_mode(interface_name, &socket);
 
-    Ok((sender, receiver))
+    Ok(socket)
 }
 
 /// Zero flags: native attach and zero-copy with fallback.
 /// When forcing a mode, XDP_COPY/XDP_ZEROCOPY belong in
 /// bind_flags — never xdp_flags, whose same-valued bits
 /// mean SKB/DRV attach mode.
-fn socket_config() -> xsk_socket_config {
+fn socket_config(rx_size: u32, tx_size: u32) -> xsk_socket_config {
     xsk_socket_config {
-        rx_size: DEFAULT_RING_SIZE,
-        tx_size: DEFAULT_RING_SIZE,
+        rx_size,
+        tx_size,
         __bindgen_anon_1: xsk_socket_config__bindgen_ty_1 { libbpf_flags: 0 },
         xdp_flags: 0,
         bind_flags: 0,
@@ -197,7 +247,7 @@ fn setrlimit() -> Result<(), io::Error> {
 
 /// Warns when the socket fell back to copy mode — silent
 /// and an order of magnitude slower if left undetected.
-fn warn_copy_mode(interface_name: &str, socket: SocketHalf<'_>) {
+fn warn_copy_mode(interface_name: &str, socket: &XdpSocket) {
     if !socket.config().zero_copy {
         tracing::warn!(
             interface = interface_name,
@@ -224,8 +274,6 @@ enum Error {
     Setrlimit(io::Error),
     #[error("Interface name contains null character(s): {0}")]
     InvalidInterfaceName(NulError),
-    #[error("The share count '{share_count}' overflows the umem frame count.")]
-    TooManySockets { share_count: usize },
     #[error("Failed to initialize the socket for queue {queue_id}: {source}")]
     Initialize { queue_id: u32, source: io::Error },
 }
@@ -250,12 +298,28 @@ impl From<UmemError> for XdpError {
 
 // Guards the unsafe Send and Sync impls the worker move
 // rests on; nothing else in the crate would catch their
-// removal. The halves being Send needs the shared socket
-// to be both.
+// removal.
 const _: () = {
     const fn assert_send<T: Send>() {}
+    assert_send::<XdpSocket>();
     assert_send::<XdpSender>();
     assert_send::<XdpReceiver>();
     assert_send::<FramePool>();
     assert_send::<Umem>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_frames_fill_one_socket() {
+        let config = XdpConfig::default();
+        assert_eq!(
+            config.frame_count,
+            2 * (DEFAULT_RECEIVE_DEPTH + DEFAULT_SEND_DEPTH)
+        );
+        assert_eq!(config.frames_for(3), Some(3 * config.frame_count));
+        assert_eq!(config.frames_for(u32::MAX), None);
+    }
+}

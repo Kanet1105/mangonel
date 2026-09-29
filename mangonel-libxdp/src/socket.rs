@@ -13,44 +13,95 @@ use crate::{
     pool::FramePool,
     ring::{Consumer, Producer},
     umem::Umem,
+    xdp::XdpConfig,
 };
 
-/// Wraps a bound socket and its rings into the two halves
-/// that drive it. `umem` is what the socket's frames live
-/// in; held so it cannot be freed first.
-pub(crate) fn split(
-    socket: NonNull<xsk_socket>,
-    rx_ring: Consumer,
-    tx_ring: Producer,
-    fill_ring: Producer,
-    completion_ring: Consumer,
-    umem: Umem,
-) -> (XdpSender, XdpReceiver) {
-    let socket = Arc::new(XdpSocket {
-        socket,
-        rx_ring,
-        tx_ring,
-        fill_ring,
-        completion_ring,
-        umem,
-    });
+/// One bound AF_XDP queue, driven from one thread through
+/// both directions. `Send` but not `Sync`; [`Self::split`]
+/// it into an [`XdpSender`] and an [`XdpReceiver`] to drive
+/// the directions from different threads. Made by
+/// [`crate::bind`] or [`crate::bind_shared`].
+pub struct XdpSocket {
+    socket: Socket,
+}
 
-    (
-        XdpSender {
-            socket: socket.clone(),
-        },
-        XdpReceiver { socket },
-    )
+impl XdpSocket {
+    /// Wraps a bound socket and its rings. `umem` is what
+    /// the socket's frames live in; held so it cannot be
+    /// freed first.
+    pub(crate) fn new(
+        socket: NonNull<xsk_socket>,
+        rx_ring: Consumer,
+        tx_ring: Producer,
+        fill_ring: Producer,
+        completion_ring: Consumer,
+        umem: Umem,
+    ) -> Self {
+        Self {
+            socket: Socket {
+                socket,
+                rx_ring,
+                tx_ring,
+                fill_ring,
+                completion_ring,
+                umem,
+            },
+        }
+    }
+
+    /// Splits into the transmit and receive halves, which
+    /// may run on different threads. The socket stays bound
+    /// until both halves drop.
+    // Shared only between the halves, whose `Send` impls
+    // carry the justification `Sync` would otherwise give.
+    #[expect(clippy::arc_with_non_send_sync)]
+    pub fn split(self) -> (XdpSender, XdpReceiver) {
+        let socket = Arc::new(self.socket);
+
+        (
+            XdpSender {
+                socket: socket.clone(),
+            },
+            XdpReceiver { socket },
+        )
+    }
+
+    /// As [`XdpSender::send`].
+    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
+    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        self.socket.send(buffer)
+    }
+
+    /// As [`XdpReceiver::receive`].
+    #[must_use = "the count says how many descriptors were filled with received frames"]
+    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        self.socket.receive(buffer)
+    }
+
+    pub fn config(&self) -> SocketConfig {
+        self.socket.config()
+    }
+
+    pub(crate) fn umem(&self) -> &Umem {
+        &self.socket.umem
+    }
 }
 
 /// The transmit half of one bound AF_XDP queue: drives
 /// its tx and completion rings. Not `Clone`, so those
-/// rings have one driver. Made by [`crate::bind`] or
-/// [`crate::bind_shared`]; the socket stays bound until
-/// both halves drop.
+/// rings have one driver. Made by [`XdpSocket::split`].
 pub struct XdpSender {
-    socket: Arc<XdpSocket>,
+    socket: Arc<Socket>,
 }
+
+// SAFETY: `Socket` is `Send`; sharing it with the receiver
+// is sound because this half only drives the tx and
+// completion rings, via `&mut self` on a non-`Clone` type,
+// while the receiver only drives rx and fill. Everything
+// else reached through the shared socket is its fd, whose
+// syscalls are thread-safe, and the umem, which
+// synchronizes itself.
+unsafe impl Send for XdpSender {}
 
 impl XdpSender {
     /// Consumes the front of `buffer`, queueing live
@@ -62,14 +113,22 @@ impl XdpSender {
     pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         self.socket.send(buffer)
     }
+
+    pub fn config(&self) -> SocketConfig {
+        self.socket.config()
+    }
 }
 
 /// The receive half of one bound AF_XDP queue: drives
 /// its rx and fill rings. Not `Clone`, so those rings
-/// have one driver. Made alongside [`XdpSender`].
+/// have one driver. Made by [`XdpSocket::split`].
 pub struct XdpReceiver {
-    socket: Arc<XdpSocket>,
+    socket: Arc<Socket>,
 }
+
+// SAFETY: As for `XdpSender`, with this half driving only
+// the rx and fill rings.
+unsafe impl Send for XdpReceiver {}
 
 impl XdpReceiver {
     /// Fills the front of `buffer` with one minted
@@ -80,54 +139,18 @@ impl XdpReceiver {
     pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         self.socket.receive(buffer)
     }
-}
-
-pub struct SocketHalf<'a> {
-    socket: &'a Arc<XdpSocket>,
-}
-
-impl<'a> From<&'a XdpSender> for SocketHalf<'a> {
-    fn from(value: &'a XdpSender) -> Self {
-        Self {
-            socket: &value.socket,
-        }
-    }
-}
-
-impl<'a> From<&'a XdpReceiver> for SocketHalf<'a> {
-    fn from(value: &'a XdpReceiver) -> Self {
-        Self {
-            socket: &value.socket,
-        }
-    }
-}
-
-impl<'a> SocketHalf<'a> {
-    pub(crate) fn umem(&self) -> &Umem {
-        &self.socket.umem
-    }
 
     pub fn config(&self) -> SocketConfig {
         self.socket.config()
     }
 }
 
-/// What a bound socket was given: its ring sizes, its
-/// umem's frame layout, and the bind mode the kernel
+/// What a bound socket was given: the depths and umem
+/// layout it runs with, and the bind mode the kernel
 /// granted. Fixed for the socket's lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SocketConfig {
-    /// Entries in each of the four rings.
-    pub rx_size: u32,
-    pub tx_size: u32,
-    pub fill_size: u32,
-    pub completion_size: u32,
-    /// Bytes per umem frame, a power of two.
-    pub frame_size: u32,
-    /// Bytes reserved before each frame's packet data.
-    pub frame_headroom: u32,
-    /// Frames in the umem, shared by every socket on it.
-    pub frame_count: u32,
+    pub xdp: XdpConfig,
     /// Whether the driver bound zero-copy rather than
     /// falling back to copy mode.
     pub zero_copy: bool,
@@ -136,12 +159,12 @@ pub struct SocketConfig {
 /// One bound AF_XDP queue: receive and transmit over its
 /// four rings, recycling frames through the umem's shared
 /// [`FramePool`]. Private: it is only ever driven through
-/// the [`XdpSender`] and [`XdpReceiver`] halves that share
-/// it, whose `&mut self` methods are what give each ring a
-/// single driver. Deleted when the last half drops, with
-/// every ring alive: libxdp dereferences all four while
-/// deleting.
-struct XdpSocket {
+/// [`XdpSocket`] or the [`XdpSender`] and [`XdpReceiver`]
+/// halves that share it, whose `&mut self` methods are what
+/// give each ring a single driver. Deleted when its last
+/// owner drops, with every ring alive: libxdp dereferences
+/// all four while deleting.
+struct Socket {
     socket: NonNull<xsk_socket>,
     rx_ring: Consumer,
     tx_ring: Producer,
@@ -152,39 +175,39 @@ struct XdpSocket {
 }
 
 // SAFETY: The socket pointer and rings have no thread
-// affinity; the socket is only read for its fd, whose
-// syscalls are thread-safe. The rings are driven only
-// through the halves: rx and fill by `XdpReceiver`, tx and
-// completion by `XdpSender`, each via `&mut self` on a
-// non-`Clone` type, so no ring is touched from two threads
-// at once even when the halves live on different ones. The
-// type is private, so no other `&XdpSocket` exists. The
-// umem synchronizes itself.
-unsafe impl Send for XdpSocket {}
-unsafe impl Sync for XdpSocket {}
+// affinity, so the socket may move between threads. It is
+// deliberately not `Sync`: its `&self` methods drive the
+// rings unsynchronized, so only the halves, which each
+// drive disjoint rings, may share it across threads.
+unsafe impl Send for Socket {}
 
-impl Drop for XdpSocket {
+impl Drop for Socket {
     fn drop(&mut self) {
         // Runs before the fields drop, so the delete sees
-        // every ring alive and precedes the xsk_umem__delete.
+        // every ring alive and precedes the
+        // xsk_umem__delete.
         unsafe { xsk_socket__delete(self.socket.as_ptr()) }
     }
 }
 
-impl XdpSocket {
+impl Socket {
     /// Zero-copy is asked of the kernel each call; a failed
     /// getsockopt counts as no.
     fn config(&self) -> SocketConfig {
         let umem = self.umem.config();
 
+        // Each pair is created at one depth.
+        debug_assert_eq!(self.rx_ring.size(), self.fill_ring.size());
+        debug_assert_eq!(self.tx_ring.size(), self.completion_ring.size());
+
         SocketConfig {
-            rx_size: self.rx_ring.size(),
-            tx_size: self.tx_ring.size(),
-            fill_size: self.fill_ring.size(),
-            completion_size: self.completion_ring.size(),
-            frame_size: umem.frame_size,
-            frame_headroom: umem.frame_headroom,
-            frame_count: self.umem.frame_count(),
+            xdp: XdpConfig {
+                receive_depth: self.rx_ring.size(),
+                send_depth: self.tx_ring.size(),
+                frame_size: umem.frame_size,
+                frame_headroom: umem.frame_headroom,
+                frame_count: self.umem.frame_count(),
+            },
             zero_copy: self.zero_copy(),
         }
     }
@@ -207,7 +230,7 @@ impl XdpSocket {
     }
 
     /// Backs [`XdpReceiver::receive`]. `&self` only because
-    /// the halves share this socket; the receiver's
+    /// the halves share this socket; the caller's
     /// `&mut self` is the exclusivity.
     fn receive(&self, buffer: &mut [XdpDescriptor]) -> u32 {
         let size = u32::try_from(buffer.len())
@@ -221,8 +244,9 @@ impl XdpSocket {
         let mut offset: u32 = 0;
         while offset < available {
             let descriptor = self.rx_ring.read_descriptor(index.wrapping_add(offset));
-            // The one kernel input the slice accessors trust:
-            // a packet crossing its frame boundary would alias
+            // The one kernel input the slice accessors
+            // trust: a packet crossing its
+            // frame boundary would alias
             // other descriptors' frames.
             assert!(
                 (descriptor.addr & frame_mask) + u64::from(descriptor.len) <= frame_mask + 1,
@@ -246,8 +270,9 @@ impl XdpSocket {
         let size = u32::try_from(buffer.len())
             .unwrap_or(u32::MAX)
             .min(self.tx_ring.size());
-        // Validate before claiming: a caught panic after the
-        // claim would desync the producer index for good.
+        // Validate before claiming: a caught panic after
+        // the claim would desync the producer index
+        // for good.
         let umem_id = self.umem.id();
         let mut transmit_count: u32 = 0;
         for descriptor in &buffer[..size as usize] {
@@ -280,7 +305,8 @@ impl XdpSocket {
                     descriptor.length,
                 );
                 written += 1;
-                // Ownership of the frame moved to the tx ring.
+                // Ownership of the frame moved to the tx
+                // ring.
                 descriptor.defuse();
             }
             consumed += 1;
@@ -304,8 +330,8 @@ impl XdpSocket {
             return;
         };
 
-        // The kernel only consumes fill entries, so the free
-        // space checked above cannot shrink.
+        // The kernel only consumes fill entries, so the
+        // free space checked above cannot shrink.
         let (available, index) = self.fill_ring.claim(count);
         assert!(
             available == count,
@@ -351,8 +377,9 @@ impl XdpSocket {
     fn pool_claim_write(pool: &FramePool, size: u32) -> u32 {
         loop {
             if let Some((available, index)) = pool.claim_write(size) {
-                // A capped grant committed at the requested size
-                // would corrupt the pool.
+                // A capped grant committed at the requested
+                // size would corrupt the
+                // pool.
                 assert!(
                     available == size,
                     "The pool capacity is smaller than a burst. This is a bug."

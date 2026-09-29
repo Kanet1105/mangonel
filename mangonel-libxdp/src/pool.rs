@@ -83,8 +83,9 @@ impl FramePool {
         let size = size.min(self.inner.size);
         let mut head = self.inner.producer_head.load(Ordering::Relaxed);
         loop {
-            // Acquire pairs with commit_read's Release: those
-            // reads finished before we overwrite.
+            // Acquire pairs with commit_read's Release:
+            // those reads finished before we
+            // overwrite.
             let free_until = self
                 .inner
                 .consumer_tail
@@ -110,8 +111,8 @@ impl FramePool {
 
     /// Invisible to consumers until `commit_write`.
     pub(crate) fn write_at(&self, index: usize, value: u64) {
-        // SAFETY: The slot is owned by this producer between
-        // claim_write and commit_write.
+        // SAFETY: The slot is owned by this producer
+        // between claim_write and commit_write.
         unsafe { *self.slot(Self::position(index)) = value };
     }
 
@@ -139,8 +140,8 @@ impl FramePool {
         let size = size.min(self.inner.size);
         let mut head = self.inner.consumer_head.load(Ordering::Relaxed);
         loop {
-            // Acquire pairs with commit_write's Release: the
-            // slot contents are visible.
+            // Acquire pairs with commit_write's Release:
+            // the slot contents are visible.
             let committed = self.inner.producer_tail.load(Ordering::Acquire);
             // In [0, size] regardless of u32 wrap.
             let available = committed.wrapping_sub(head);
@@ -165,8 +166,8 @@ impl FramePool {
 
     /// Owned by this consumer until `commit_read`.
     pub(crate) fn read_at(&self, index: usize) -> u64 {
-        // SAFETY: The slot is owned by this consumer between
-        // claim_read and commit_read.
+        // SAFETY: The slot is owned by this consumer
+        // between claim_read and commit_read.
         unsafe { *self.slot(Self::position(index)) }
     }
 
