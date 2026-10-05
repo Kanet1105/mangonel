@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["mangonel", "mangonel-control-plane", "mangonel-libxdp", "mangonel-libxdp-sys", "mangonel-nic"]
+members = ["mangonel", "mangonel-control-plane", "mangonel-data-plane", "mangonel-libxdp", "mangonel-libxdp-sys", "mangonel-nic"]
 
 # Matches libxdp, which mangonel links against. See LICENSE.
 [workspace.package]
@@ -8,6 +8,7 @@ license = "LGPL-2.1 OR BSD-2-Clause"
 
 [workspace.dependencies]
 mangonel-control-plane = { path = "mangonel-control-plane" }
+mangonel-data-plane = { path = "mangonel-data-plane" }
 mangonel-libxdp = { path = "mangonel-libxdp" }
 mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
 mangonel-nic = { path = "mangonel-nic" }

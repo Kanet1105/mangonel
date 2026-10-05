@@ -186,6 +186,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mangonel-data-plane"
+version = "0.1.0"
+
+[[package]]
 name = "mangonel-libxdp"
 version = "0.1.0"
 dependencies = [
