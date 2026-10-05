@@ -10,7 +10,6 @@ use mangonel_libxdp_sys::{
 
 use crate::{
     descriptor::XdpDescriptor,
-    pool::FramePool,
     ring::{Consumer, Producer},
     umem::Umem,
     xdp::XdpConfig,
@@ -158,12 +157,13 @@ pub struct SocketConfig {
 
 /// One bound AF_XDP queue: receive and transmit over its
 /// four rings, recycling frames through the umem's shared
-/// [`FramePool`]. Private: it is only ever driven through
-/// [`XdpSocket`] or the [`XdpSender`] and [`XdpReceiver`]
-/// halves that share it, whose `&mut self` methods are what
-/// give each ring a single driver. Deleted when its last
-/// owner drops, with every ring alive: libxdp dereferences
-/// all four while deleting.
+/// [`FramePool`](crate::pool::FramePool). Private: it is
+/// only ever driven through [`XdpSocket`] or the
+/// [`XdpSender`] and [`XdpReceiver`] halves that share it,
+/// whose `&mut self` methods are what give each ring a
+/// single driver. Deleted when its last owner drops, with
+/// every ring alive: libxdp dereferences all four while
+/// deleting.
 struct Socket {
     socket: NonNull<xsk_socket>,
     rx_ring: Consumer,
@@ -194,7 +194,7 @@ impl Socket {
     /// Zero-copy is asked of the kernel each call; a failed
     /// getsockopt counts as no.
     fn config(&self) -> SocketConfig {
-        let umem = self.umem.config();
+        let umem = self.umem.shared().config();
 
         // Each pair is created at one depth.
         debug_assert_eq!(self.rx_ring.size(), self.fill_ring.size());
@@ -206,7 +206,7 @@ impl Socket {
                 send_depth: self.tx_ring.size(),
                 frame_size: umem.frame_size,
                 frame_headroom: umem.frame_headroom,
-                frame_count: self.umem.frame_count(),
+                frame_count: self.umem.shared().frame_count(),
             },
             zero_copy: self.zero_copy(),
         }
@@ -239,8 +239,14 @@ impl Socket {
         self.fill();
         self.poll();
         let (available, index) = self.rx_ring.claim(size);
+        let shared = self.umem.shared();
         // Frames are power-of-two sized.
-        let frame_mask = u64::from(self.umem.config().frame_size - 1);
+        let frame_mask = u64::from(shared.config().frame_size - 1);
+        // Count the whole batch at once rather than each
+        // descriptor; see `UmemShared`.
+        if available > 0 {
+            shared.lend(available);
+        }
         let mut offset: u32 = 0;
         while offset < available {
             let descriptor = self.rx_ring.read_descriptor(index.wrapping_add(offset));
@@ -255,7 +261,7 @@ impl Socket {
             buffer[offset as usize] = XdpDescriptor {
                 address: descriptor.addr,
                 length: descriptor.len,
-                umem: Some(self.umem.clone()),
+                umem: Some(NonNull::from(shared)),
             };
             offset += 1;
         }
@@ -273,12 +279,17 @@ impl Socket {
         // Validate before claiming: a caught panic after
         // the claim would desync the producer index
         // for good.
-        let umem_id = self.umem.id();
+        // Identity by address is sound: a umem's shared
+        // half is freed only once no descriptor
+        // points at it, so its address cannot be
+        // reused under a live one.
+        let shared = self.umem.shared();
+        let own = NonNull::from(shared);
         let mut transmit_count: u32 = 0;
         for descriptor in &buffer[..size as usize] {
-            if let Some(umem) = &descriptor.umem {
+            if let Some(umem) = descriptor.umem {
                 assert!(
-                    umem.id() == umem_id,
+                    umem == own,
                     "Sent a XdpDescriptor that was minted against a different umem: its \
                      address indexes the wrong memory."
                 );
@@ -312,6 +323,9 @@ impl Socket {
             consumed += 1;
         }
         self.tx_ring.commit(written);
+        if written > 0 {
+            shared.reclaim(written);
+        }
         self.kick();
         // Nothing else returns tx frames to the pool.
         self.complete();
@@ -325,7 +339,7 @@ impl Socket {
         // all-or-nothing claim would starve RX in bursts.
         let ring_size = self.fill_ring.size();
         let want = ring_size.min(self.fill_ring.free(ring_size));
-        let pool = self.umem.pool();
+        let pool = self.umem.shared().pool();
         let Some((count, pool_index)) = pool.claim_read(want) else {
             return;
         };
@@ -355,8 +369,8 @@ impl Socket {
             return;
         }
 
-        let pool = self.umem.pool();
-        let pool_index = Self::pool_claim_write(pool, filled);
+        let pool = self.umem.shared().pool();
+        let pool_index = pool.claim_write_all(filled);
         let mut offset: u32 = 0;
         while offset < filled {
             pool.write_at(
@@ -368,27 +382,6 @@ impl Socket {
         }
         pool.commit_write(pool_index as usize, filled);
         self.completion_ring.commit(filled);
-    }
-
-    /// Claims pool slots for frames leaving the datapath.
-    /// Room always exists — an in-flight frame holds no
-    /// pool slot — so the spin only covers another
-    /// worker's open grant.
-    fn pool_claim_write(pool: &FramePool, size: u32) -> u32 {
-        loop {
-            if let Some((available, index)) = pool.claim_write(size) {
-                // A capped grant committed at the requested
-                // size would corrupt the
-                // pool.
-                assert!(
-                    available == size,
-                    "The pool capacity is smaller than a burst. This is a bug."
-                );
-
-                return index;
-            }
-            std::hint::spin_loop();
-        }
     }
 
     /// Wakes the driver; non-blocking, carries no data.
