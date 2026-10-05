@@ -109,6 +109,27 @@ impl FramePool {
         }
     }
 
+    /// As [`Self::claim_write`], for frames leaving the
+    /// datapath, which always fit: a frame outside the pool
+    /// holds no slot. The spin only covers another thread's
+    /// open grant. Returns the index of the grant, which is
+    /// exactly `size` long.
+    pub(crate) fn claim_write_all(&self, size: u32) -> u32 {
+        loop {
+            if let Some((available, index)) = self.claim_write(size) {
+                // A capped grant committed at the requested
+                // size would corrupt the pool.
+                assert!(
+                    available == size,
+                    "The pool capacity is smaller than a burst. This is a bug."
+                );
+
+                return index;
+            }
+            std::hint::spin_loop();
+        }
+    }
+
     /// Invisible to consumers until `commit_write`.
     pub(crate) fn write_at(&self, index: usize, value: u64) {
         // SAFETY: The slot is owned by this producer
@@ -188,7 +209,7 @@ impl FramePool {
 
 /// Pads to a cache line so the cursors do not share one.
 #[repr(align(64))]
-struct CacheAligned<T>(T);
+pub(crate) struct CacheAligned<T>(pub(crate) T);
 
 impl<T> Deref for CacheAligned<T> {
     type Target = T;
