@@ -9,7 +9,7 @@
 //! queues.
 //!
 //! Each I/O thread talks to each worker over a pair of
-//! [`spsc`](crate::spsc) rings, a [`WorkerLink`]. Nothing
+//! [`spsc`] rings, a [`WorkerLink`]. Nothing
 //! blocks: a full ring or a full transmit queue drops the
 //! frames that did not fit and counts them.
 
@@ -23,12 +23,9 @@ use std::{
 };
 
 use mangonel_libxdp::{XdpDescriptor, XdpSocket};
+use mangonel_ring::spsc::{self, Consumer, Producer};
 
-use crate::{
-    Buckets,
-    flow::flow_hash,
-    spsc::{self, Consumer, Producer},
-};
+use crate::{Buckets, flow::flow_hash};
 
 /// An interface, as the I/O threads and workers number
 /// them.

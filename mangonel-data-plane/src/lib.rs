@@ -12,8 +12,9 @@
 mod buckets;
 mod flow;
 mod io;
-pub mod spsc;
 
 pub use buckets::{Buckets, DEFAULT_BUCKET_COUNT};
 pub use flow::flow_hash;
 pub use io::{IoConfig, IoStats, IoThread, Packet, PortId, WorkerLink};
+/// The rings a [`WorkerLink`] is made of.
+pub use mangonel_ring::spsc;

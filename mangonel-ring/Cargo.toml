@@ -1,12 +1,10 @@
 [package]
-name = "mangonel-data-plane"
+name = "mangonel-ring"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
 
 [dependencies]
-mangonel-libxdp = { workspace = true }
-mangonel-ring = { workspace = true }
 
 [lints]
 workspace = true

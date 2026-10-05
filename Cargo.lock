@@ -190,6 +190,7 @@ name = "mangonel-data-plane"
 version = "0.1.0"
 dependencies = [
  "mangonel-libxdp",
+ "mangonel-ring",
 ]
 
 [[package]]
@@ -216,6 +217,10 @@ dependencies = [
  "libc",
  "thiserror",
 ]
+
+[[package]]
+name = "mangonel-ring"
+version = "0.1.0"
 
 [[package]]
 name = "matchers"

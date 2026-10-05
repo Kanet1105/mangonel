@@ -1,5 +1,5 @@
 //! Bounded single-producer, single-consumer rings that hand
-//! batches between the I/O thread and the workers.
+//! batches from one thread to another.
 //!
 //! Each side keeps its own cursor locally and a cached copy
 //! of the other side's, so a batch touches the shared
