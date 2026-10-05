@@ -1,18 +1,20 @@
 [workspace]
 resolver = "3"
-members = ["mangonel", "mangonel-libxdp", "mangonel-libxdp-sys", "mangonel-nic"]
+members = ["mangonel", "mangonel-control-plane", "mangonel-libxdp", "mangonel-libxdp-sys", "mangonel-nic"]
 
 # Matches libxdp, which mangonel links against. See LICENSE.
 [workspace.package]
 license = "LGPL-2.1 OR BSD-2-Clause"
 
 [workspace.dependencies]
+mangonel-control-plane = { path = "mangonel-control-plane" }
 mangonel-libxdp = { path = "mangonel-libxdp" }
 mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
 mangonel-nic = { path = "mangonel-nic" }
 
 # default-features = false throughout; each crate turns on the
 # features it needs.
+left-right = { version = "0.11", default-features = false }
 libc = { version = "0.2", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 tracing = { version = "0.1", default-features = false }
