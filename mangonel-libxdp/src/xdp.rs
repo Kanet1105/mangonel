@@ -11,6 +11,7 @@ use mangonel_libxdp_sys::{
 };
 
 use crate::{
+    descriptor::XdpDescriptor,
     pool::FramePool,
     ring::{Consumer, Producer, RingError, ring_buffer},
     socket::{XdpReceiver, XdpSender, XdpSocket},
@@ -306,6 +307,10 @@ const _: () = {
     assert_send::<XdpReceiver>();
     assert_send::<FramePool>();
     assert_send::<Umem>();
+    assert_send::<XdpDescriptor>();
+
+    const fn assert_sync<T: Sync>() {}
+    assert_sync::<XdpDescriptor>();
 };
 
 #[cfg(test)]
