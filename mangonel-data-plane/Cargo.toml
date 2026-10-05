@@ -5,6 +5,7 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
+mangonel-libxdp = { workspace = true }
 
 [lints]
 workspace = true
