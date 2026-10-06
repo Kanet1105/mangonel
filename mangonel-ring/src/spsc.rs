@@ -6,19 +6,45 @@
 //! cursors at most twice. Dropping an endpoint closes the
 //! ring; the other side sees it once it has taken
 //! everything that was pushed.
+//!
+//! # Examples
+//!
+//! ```
+//! use mangonel_ring::spsc;
+//!
+//! let (mut tx, mut rx) = spsc::channel::<u32>(4);
+//! tx.push_from(&mut vec![1, 2]);
+//!
+//! let mut out = Vec::new();
+//! rx.pop_into(&mut out, 2);
+//! assert_eq!(out, [1, 2]);
+//! ```
 
 use std::{
     cell::UnsafeCell,
     mem::MaybeUninit,
-    ops::Deref,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
+use crossbeam_utils::CachePadded;
+
 /// A ring holding up to `capacity` items, which must be a
-/// power of two.
+/// power of two. Returns its two ends.
+///
+/// # Panics
+///
+/// If `capacity` is not a power of two.
+///
+/// # Examples
+///
+/// ```
+/// use mangonel_ring::spsc;
+///
+/// let (tx, rx) = spsc::channel::<u32>(4);
+/// ```
 pub fn channel<T: Send>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     assert!(
         capacity.is_power_of_two(),
@@ -30,8 +56,8 @@ pub fn channel<T: Send>(capacity: usize) -> (Producer<T>, Consumer<T>) {
             .map(|_| UnsafeCell::new(MaybeUninit::uninit()))
             .collect(),
         mask: capacity - 1,
-        head: CachePadded(AtomicUsize::new(0)),
-        tail: CachePadded(AtomicUsize::new(0)),
+        head: CachePadded::new(AtomicUsize::new(0)),
+        tail: CachePadded::new(AtomicUsize::new(0)),
         producer_closed: AtomicBool::new(false),
         consumer_closed: AtomicBool::new(false),
     });
@@ -50,7 +76,17 @@ pub fn channel<T: Send>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     )
 }
 
-/// The pushing end. `Send`, not `Clone`.
+/// The pushing end. `Send`, not `Clone`. Dropping it
+/// closes the ring.
+///
+/// # Examples
+///
+/// ```
+/// use mangonel_ring::spsc;
+///
+/// let (mut tx, _rx) = spsc::channel::<u32>(4);
+/// tx.push_from(&mut vec![1]);
+/// ```
 pub struct Producer<T> {
     shared: Arc<Shared<T>>,
     /// Next position to write; mirrors `shared.tail`.
@@ -60,6 +96,8 @@ pub struct Producer<T> {
 }
 
 impl<T> Drop for Producer<T> {
+    /// Closes the ring. Items already pushed stay for the
+    /// consumer to take.
     fn drop(&mut self) {
         // Release: every push happens before the consumer
         // sees the ring closed.
@@ -71,6 +109,15 @@ impl<T: Send> Producer<T> {
     /// Moves as many items from the front of `items` as
     /// fit, and returns how many moved. The rest stay
     /// in `items`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::spsc;
+    ///
+    /// let (mut tx, _rx) = spsc::channel::<u32>(4);
+    /// assert_eq!(tx.push_from(&mut vec![1, 2]), 2);
+    /// ```
     pub fn push_from(&mut self, items: &mut Vec<T>) -> usize {
         let capacity = self.shared.slots.len();
         if items.len() > capacity - self.tail.wrapping_sub(self.head) {
@@ -99,12 +146,32 @@ impl<T: Send> Producer<T> {
 
     /// Whether the consumer has gone, so nothing pushed
     /// will be taken.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::spsc;
+    ///
+    /// let (tx, rx) = spsc::channel::<u32>(4);
+    /// drop(rx);
+    /// assert!(tx.is_closed());
+    /// ```
     pub fn is_closed(&self) -> bool {
         self.shared.consumer_closed.load(Ordering::Acquire)
     }
 }
 
-/// The taking end. `Send`, not `Clone`.
+/// The taking end. `Send`, not `Clone`. Dropping it
+/// closes the ring.
+///
+/// # Examples
+///
+/// ```
+/// use mangonel_ring::spsc;
+///
+/// let (_tx, mut rx) = spsc::channel::<u32>(4);
+/// rx.pop_into(&mut Vec::new(), 1);
+/// ```
 pub struct Consumer<T> {
     shared: Arc<Shared<T>>,
     /// Next position to read; mirrors `shared.head`.
@@ -114,6 +181,8 @@ pub struct Consumer<T> {
 }
 
 impl<T> Drop for Consumer<T> {
+    /// Closes the ring. Items still in it are dropped
+    /// once the producer is gone too.
     fn drop(&mut self) {
         self.shared.consumer_closed.store(true, Ordering::Release);
     }
@@ -122,6 +191,18 @@ impl<T> Drop for Consumer<T> {
 impl<T: Send> Consumer<T> {
     /// Appends up to `max` items to `out` and returns how
     /// many.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::spsc;
+    ///
+    /// let (mut tx, mut rx) = spsc::channel::<u32>(4);
+    /// tx.push_from(&mut vec![1]);
+    ///
+    /// let mut out = Vec::new();
+    /// assert_eq!(rx.pop_into(&mut out, 8), 1);
+    /// ```
     pub fn pop_into(&mut self, out: &mut Vec<T>, max: usize) -> usize {
         if self.tail.wrapping_sub(self.head) < max {
             // Acquire pairs with the producer's Release:
@@ -149,6 +230,16 @@ impl<T: Send> Consumer<T> {
 
     /// Whether the producer has gone and every item it
     /// pushed has been taken: nothing more will arrive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::spsc;
+    ///
+    /// let (tx, mut rx) = spsc::channel::<u32>(4);
+    /// drop(tx);
+    /// assert!(rx.is_finished());
+    /// ```
     pub fn is_finished(&mut self) -> bool {
         // Closed first: the Acquire makes every push
         // visible to the tail load that follows.
@@ -161,14 +252,18 @@ impl<T: Send> Consumer<T> {
     }
 }
 
+/// The state both ends hold through an `Arc`.
 struct Shared<T> {
+    /// Initialised exactly for positions in `[head, tail)`.
     slots: Box<[UnsafeCell<MaybeUninit<T>>]>,
     mask: usize,
     /// Consumer's position: everything below is free again.
     head: CachePadded<AtomicUsize>,
     /// Producer's position: everything below is readable.
     tail: CachePadded<AtomicUsize>,
+    /// Set when the `Producer` is dropped.
     producer_closed: AtomicBool,
+    /// Set when the `Consumer` is dropped.
     consumer_closed: AtomicBool,
 }
 
@@ -178,6 +273,8 @@ struct Shared<T> {
 // Release/Acquire pairs. Items move between threads, hence
 // `T: Send`.
 unsafe impl<T: Send> Sync for Shared<T> {}
+// SAFETY: Moving `Shared` moves the items in it, which is
+// sound for `T: Send`.
 unsafe impl<T: Send> Send for Shared<T> {}
 
 impl<T> Drop for Shared<T> {
@@ -195,27 +292,10 @@ impl<T> Drop for Shared<T> {
 }
 
 impl<T> Shared<T> {
+    /// The slot that the cursor position `position` maps
+    /// to.
     fn slot(&self, position: usize) -> *mut MaybeUninit<T> {
         self.slots[position & self.mask].get()
-    }
-}
-
-/// Pads to a cache line so the two cursors do not share
-/// one.
-#[repr(align(64))]
-struct CachePadded<T>(T);
-
-impl<T> Deref for CachePadded<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T> std::ops::DerefMut for CachePadded<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
