@@ -269,12 +269,16 @@ pub struct XdpError(Error);
 enum Error {
     #[error(transparent)]
     Ring(#[from] RingError),
+
     #[error(transparent)]
     Umem(#[from] UmemError),
+
     #[error("Failed to raise RLIMIT_MEMLOCK (need root or CAP_SYS_RESOURCE): {0}")]
     Setrlimit(io::Error),
+
     #[error("Interface name contains null character(s): {0}")]
     InvalidInterfaceName(NulError),
+
     #[error("Failed to initialize the socket for queue {queue_id}: {source}")]
     Initialize { queue_id: u32, source: io::Error },
 }

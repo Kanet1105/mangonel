@@ -175,6 +175,7 @@ impl AclEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Permit,
+
     Deny,
 }
 
@@ -183,6 +184,7 @@ pub enum Action {
 pub enum Protocol {
     /// Any IP packet.
     Ip,
+
     Tcp {
         source: PortMatch,
         destination: PortMatch,
@@ -190,10 +192,12 @@ pub enum Protocol {
         /// those with ACK or RST set.
         established: bool,
     },
+
     Udp {
         source: PortMatch,
         destination: PortMatch,
     },
+
     /// ICMP on IPv4, ICMPv6 on IPv6.
     Icmp {
         /// Type numbers differ between the two, so an
@@ -201,6 +205,7 @@ pub enum Protocol {
         /// a source or destination prefix.
         kind: Option<IcmpMatch>,
     },
+
     /// Any other IP protocol, by number.
     Other(u8),
 }
@@ -216,8 +221,10 @@ pub struct IcmpMatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddrMatch {
     Any,
+
     /// A network prefix; host bits must be clear.
     V4(Cidr<Ipv4Addr>),
+
     V6(Cidr<Ipv6Addr>),
 }
 
@@ -260,10 +267,15 @@ impl AddrMatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortMatch {
     Any,
+
     Eq(u16),
+
     Neq(u16),
+
     Lt(u16),
+
     Gt(u16),
+
     /// Inclusive on both ends.
     Range(u16, u16),
 }
@@ -312,21 +324,25 @@ pub enum Transport {
         destination: u16,
         flags: u8,
     },
+
     Udp {
         source: u16,
         destination: u16,
     },
+
     /// ICMP on IPv4, ICMPv6 on IPv6.
     Icmp {
         kind: u8,
         code: u8,
     },
+
     Other(u8),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Family {
     V4,
+
     V6,
 }
 

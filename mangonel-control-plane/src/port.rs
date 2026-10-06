@@ -64,6 +64,7 @@ impl<A: IpFamily> WanIp<A> {
 pub enum Addressing<A> {
     /// Leased from the ISP: DHCP on IPv4, DHCPv6 on IPv6.
     Dhcp,
+
     Static {
         cidr: Cidr<A>,
         /// The default gateway. On IPv6 this may be a
@@ -78,6 +79,7 @@ pub enum Dns<A> {
     /// Whatever the ISP hands out with the lease. Only
     /// valid with [`Addressing::Dhcp`].
     Auto,
+
     Manual {
         primary: A,
         secondary: Option<A>,
@@ -189,6 +191,7 @@ impl PortAcls {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Inbound,
+
     Outbound,
 }
 
@@ -196,6 +199,7 @@ pub enum Direction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Wan,
+
     Lan,
 }
 

@@ -373,16 +373,22 @@ impl UmemArea {
 pub enum UmemError {
     #[error("The frame size '{frame_size}' is not a power of two.")]
     FrameSizeNotPowerOfTwo { frame_size: u32 },
+
     #[error("The frame size '{frame_size}' is outside the supported range {min}..={max}.")]
     FrameSizeOutOfRange { frame_size: u32, min: u32, max: u32 },
+
     #[error("The frame count '{frame_count}' is outside the supported range 1..={max}.")]
     FrameCountOutOfRange { frame_count: u32, max: u32 },
+
     #[error("The umem area is too large to address.")]
     AreaTooLarge,
+
     #[error("Failed to read the huge page size from /proc/meminfo.")]
     HugePageSize,
+
     #[error("Failed to map memory: {0}")]
     MapMemory(io::Error),
+
     #[error("Failed to initialize Umem: {0}")]
     Initialize(io::Error),
 }

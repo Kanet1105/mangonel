@@ -170,6 +170,7 @@ impl Reader {
 
 enum Request {
     Apply(Op, Sender<Result<(), ConfigError>>),
+
     Shutdown,
 }
 
@@ -200,6 +201,7 @@ fn run(mut writer: WriteHandle<State, Op>, queue: Receiver<Request>) {
 pub enum Error {
     #[error(transparent)]
     Config(#[from] ConfigError),
+
     #[error("control plane has stopped")]
     Stopped,
 }

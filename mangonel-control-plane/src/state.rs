@@ -210,13 +210,21 @@ impl State {
 #[derive(Debug, Clone)]
 pub(crate) enum Op {
     SetWan(WanPort),
+
     SetLan(LanPort),
+
     RemoveWan(MacAddr),
+
     RemoveLan(MacAddr),
+
     SetAcl(Acl),
+
     RemoveAcl(String),
+
     SetAclEntry(String, AclEntry),
+
     RemoveAclEntry(String, u32),
+
     SetPortAcl(MacAddr, Direction, Option<String>),
 }
 
