@@ -11,8 +11,8 @@
 
 #![warn(unreachable_pub)]
 
+mod error;
 pub mod mpmc;
 pub mod spsc;
-mod error;
 
 pub use error::Error;

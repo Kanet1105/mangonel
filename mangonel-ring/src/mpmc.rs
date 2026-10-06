@@ -6,23 +6,6 @@
 //! then commit by advancing its tail. Commits land in
 //! claim order, so a side whose claim is behind an
 //! uncommitted one waits for it.
-//!
-//! # Examples
-//!
-//! ```
-//! use mangonel_ring::mpmc::Ring;
-//!
-//! let ring = Ring::<u32>::new(8)?;
-//!
-//! let start = ring.claim_write(1)?;
-//! ring.write_at(start, 1);
-//! ring.commit_write(start, 1);
-//!
-//! let start = ring.claim_read(1)?;
-//! assert_eq!(*ring.read_at(start), 1);
-//! ring.commit_read(start, 1);
-//! # Ok::<(), mangonel_ring::Error>(())
-//! ```
 
 use std::{
     cell::UnsafeCell,
@@ -36,19 +19,6 @@ use crossbeam_utils::{Backoff, CachePadded};
 
 use crate::Error;
 
-/// A bounded ring shared by any number of producers and
-/// consumers. Cloning gives another handle to the same
-/// ring.
-///
-/// # Examples
-///
-/// ```
-/// use mangonel_ring::mpmc::Ring;
-///
-/// let ring = Ring::<u64>::new(1024)?;
-/// let other = ring.clone();
-/// # Ok::<(), mangonel_ring::Error>(())
-/// ```
 #[derive(Clone)]
 pub struct Ring<T> {
     inner: Arc<RingInner<T>>,
@@ -73,6 +43,16 @@ struct RingInner<T> {
     /// the slot.
     slots: Box<[UnsafeCell<T>]>,
 }
+
+// SAFETY: A head compare-and-swap grants each slot to one
+// thread at a time, and the tails' Release/Acquire pairs
+// order one grant's accesses before the next. So the
+// slots behave like a `Mutex<T>` per slot: shared access
+// needs only `T: Send`.
+unsafe impl<T: Send> Sync for RingInner<T> {}
+// SAFETY: Moving `RingInner` moves the items in it, which
+// is sound for `T: Send`.
+unsafe impl<T: Send> Send for RingInner<T> {}
 
 impl<T: Default> Ring<T> {
     /// A ring holding up to `size` items, which must be a
@@ -110,37 +90,14 @@ impl<T: Default> Ring<T> {
             }),
         })
     }
+}
 
-    /// The slot that the cursor position `index` maps to.
+impl<T> Ring<T> {
     fn slot(&self, index: usize) -> *mut T {
         self.inner.slots[index & self.inner.mask].get()
     }
 
-    /// Claims `batch_size` free slots for writing and
-    /// returns the position of the first. The claim covers
-    /// `[start, start + batch_size)`, wrapping, and must be
-    /// committed with [`commit_write`](Self::commit_write).
-    ///
-    /// All or nothing: it never claims fewer slots than
-    /// asked for.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::InvalidBatchSize`] if `batch_size` is 0
-    ///   or larger than the ring.
-    /// - [`Error::InsufficientSpace`] if fewer than
-    ///   `batch_size` slots are free.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mangonel_ring::mpmc::Ring;
-    ///
-    /// let ring = Ring::<u32>::new(8)?;
-    /// let start = ring.claim_write(2)?;
-    /// # Ok::<(), mangonel_ring::Error>(())
-    /// ```
-    pub fn claim_write(&self, batch_size: usize) -> Result<usize, Error> {
+    fn validate_batch_size(&self, batch_size: usize) -> Result<(), Error> {
         let ring_size = self.inner.size;
         if batch_size == 0 || batch_size > ring_size {
             return Err(Error::InvalidBatchSize {
@@ -148,6 +105,33 @@ impl<T: Default> Ring<T> {
                 ring_size,
             });
         }
+
+        Ok(())
+    }
+
+    fn compute_claim_size(
+        &self,
+        batch_size: usize,
+        available: usize,
+        exact: bool,
+    ) -> Result<usize, Error> {
+        let size = if exact {
+            batch_size
+        } else {
+            batch_size.min(available)
+        };
+        if size == 0 || size > available {
+            return Err(Error::Insufficient {
+                requested: batch_size,
+                available,
+            });
+        }
+
+        Ok(size)
+    }
+
+    fn claim_write(&self, batch_size: usize, exact: bool) -> Result<(usize, usize), Error> {
+        self.validate_batch_size(batch_size)?;
 
         let head = &self.inner.producer_head;
         let mut index = head.load(Ordering::Acquire);
@@ -157,49 +141,25 @@ impl<T: Default> Ring<T> {
                 .inner
                 .consumer_tail
                 .load(Ordering::Acquire)
-                .wrapping_add(ring_size)
+                .wrapping_add(self.inner.size)
                 .wrapping_sub(index);
-            if available < batch_size {
-                return Err(Error::InsufficientSpace {
-                    requested: batch_size,
-                    available,
-                });
-            }
+
+            let size = self.compute_claim_size(batch_size, available, exact)?;
 
             match head.compare_exchange_weak(
                 index,
-                index.wrapping_add(batch_size),
+                index.wrapping_add(size),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return Ok(index),
+                Ok(_) => return Ok((size, index)),
                 Err(current) => index = current,
             }
             backoff.spin();
         }
     }
 
-    /// Writes `value` into the slot at position `index`.
-    /// The old value is dropped in place.
-    ///
-    /// # Safety
-    ///
-    /// `index` must lie in a range this caller claimed
-    /// with [`claim_write`](Self::claim_write) and has not
-    /// yet committed. Anything else can race with another
-    /// producer writing the slot or a consumer reading it.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mangonel_ring::mpmc::Ring;
-    ///
-    /// let ring = Ring::<u32>::new(8)?;
-    /// let start = ring.claim_write(1)?;
-    /// ring.write_at(start, 42);
-    /// # Ok::<(), mangonel_ring::Error>(())
-    /// ```
-    pub fn write_at(&self, index: usize, value: T) {
+    fn write_at(&self, index: usize, value: T) {
         // SAFETY: The caller holds an uncommitted write
         // claim on `index`, so no other producer writes
         // this slot and no consumer can claim it until the
@@ -207,75 +167,17 @@ impl<T: Default> Ring<T> {
         unsafe { *self.slot(index) = value };
     }
 
-    /// Publishes the claim `[index, index + batch_size)`
-    /// to consumers. Waits, yielding after a while, until
-    /// every earlier write claim has been committed, so
-    /// commits land in claim order.
-    ///
-    /// A claim that is never committed blocks every later
-    /// producer here.
-    ///
-    /// # Safety
-    ///
-    /// `index` and `batch_size` must be exactly what was
-    /// passed to and returned by one
-    /// [`claim_write`](Self::claim_write), every slot in it
-    /// must have been written, and it must be committed
-    /// only once. A larger range would let consumers read
-    /// slots another producer is still writing.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mangonel_ring::mpmc::Ring;
-    ///
-    /// let ring = Ring::<u32>::new(8)?;
-    /// let start = ring.claim_write(1)?;
-    /// ring.write_at(start, 42);
-    /// ring.commit_write(start, 1);
-    /// # Ok::<(), mangonel_ring::Error>(())
-    /// ```
-    pub fn commit_write(&self, index: usize, batch_size: usize) {
+    fn commit_write(&self, size: usize, index: usize) {
         let tail = &self.inner.producer_tail;
         let backoff = Backoff::new();
         while tail.load(Ordering::Acquire) != index {
             backoff.snooze();
         }
-        tail.store(index.wrapping_add(batch_size), Ordering::Release);
+        tail.store(index.wrapping_add(size), Ordering::Release);
     }
 
-    /// Claims `batch_size` committed items for reading and
-    /// returns the position of the first. The claim covers
-    /// `[start, start + batch_size)`, wrapping, and must be
-    /// committed with [`commit_read`](Self::commit_read).
-    ///
-    /// All or nothing: it never claims fewer items than
-    /// asked for.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::InvalidBatchSize`] if `batch_size` is 0
-    ///   or larger than the ring.
-    /// - [`Error::InsufficientItems`] if fewer than
-    ///   `batch_size` items are committed and unclaimed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mangonel_ring::mpmc::Ring;
-    ///
-    /// let ring = Ring::<u32>::new(8)?;
-    /// assert!(ring.claim_read(1).is_err());
-    /// # Ok::<(), mangonel_ring::Error>(())
-    /// ```
-    pub fn claim_read(&self, batch_size: usize) -> Result<usize, Error> {
-        let ring_size = self.inner.size;
-        if batch_size == 0 || batch_size > ring_size {
-            return Err(Error::InvalidBatchSize {
-                batch_size,
-                ring_size,
-            });
-        }
+    fn claim_read(&self, batch_size: usize, exact: bool) -> Result<(usize, usize), Error> {
+        self.validate_batch_size(batch_size)?;
 
         let head = &self.inner.consumer_head;
         let mut index = head.load(Ordering::Acquire);
@@ -286,53 +188,23 @@ impl<T: Default> Ring<T> {
                 .producer_tail
                 .load(Ordering::Acquire)
                 .wrapping_sub(index);
-            if available < batch_size {
-                return Err(Error::InsufficientItems {
-                    requested: batch_size,
-                    available,
-                });
-            }
+
+            let size = self.compute_claim_size(batch_size, available, exact)?;
 
             match head.compare_exchange_weak(
                 index,
-                index.wrapping_add(batch_size),
+                index.wrapping_add(size),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return Ok(index),
+                Ok(_) => return Ok((size, index)),
                 Err(current) => index = current,
             }
             backoff.spin();
         }
     }
 
-    /// A reference to the item in the slot at position
-    /// `index`.
-    ///
-    /// # Safety
-    ///
-    /// `index` must lie in a range this caller claimed
-    /// with [`claim_read`](Self::claim_read) and has not
-    /// yet committed, and the reference must be dropped
-    /// before [`commit_read`](Self::commit_read). After the
-    /// commit a producer may overwrite the slot while the
-    /// reference is still alive.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mangonel_ring::mpmc::Ring;
-    ///
-    /// let ring = Ring::<u32>::new(8)?;
-    /// let start = ring.claim_write(1)?;
-    /// ring.write_at(start, 9);
-    /// ring.commit_write(start, 1);
-    ///
-    /// let start = ring.claim_read(1)?;
-    /// assert_eq!(*ring.read_at(start), 9);
-    /// # Ok::<(), mangonel_ring::Error>(())
-    /// ```
-    pub fn read_at(&self, index: usize) -> &T {
+    fn read_at(&self, index: usize) -> &T {
         // SAFETY: The caller holds an uncommitted read
         // claim on `index`. The producer's commit
         // happened-before that claim, and no producer can
@@ -341,23 +213,24 @@ impl<T: Default> Ring<T> {
         unsafe { &*self.slot(index) }
     }
 
-    /// Frees the claim `[index, index + batch_size)` for
-    /// producers to reuse. Waits, yielding after a while,
-    /// until every earlier read claim has been committed,
-    /// so commits land in claim order.
+    fn commit_read(&self, size: usize, index: usize) {
+        let tail = &self.inner.consumer_tail;
+        let backoff = Backoff::new();
+        while tail.load(Ordering::Acquire) != index {
+            backoff.snooze();
+        }
+        tail.store(index.wrapping_add(size), Ordering::Release);
+    }
+
+    /// Grants as many free slots as are available, up to
+    /// `batch_size`, for writing. Readers see them once the
+    /// grant is dropped.
     ///
-    /// A claim that is never committed blocks every later
-    /// consumer here.
+    /// # Errors
     ///
-    /// # Safety
-    ///
-    /// `index` and `batch_size` must be exactly what was
-    /// passed to and returned by one
-    /// [`claim_read`](Self::claim_read), it must be
-    /// committed only once, and no reference from
-    /// [`read_at`](Self::read_at) into it may be used
-    /// afterwards. A larger range would let producers
-    /// overwrite slots another consumer is still reading.
+    /// - [`Error::InvalidBatchSize`] if `batch_size` is 0
+    ///   or larger than the ring.
+    /// - [`Error::Insufficient`] if no slot is free.
     ///
     /// # Examples
     ///
@@ -365,21 +238,232 @@ impl<T: Default> Ring<T> {
     /// use mangonel_ring::mpmc::Ring;
     ///
     /// let ring = Ring::<u32>::new(8)?;
-    /// let start = ring.claim_write(1)?;
-    /// ring.write_at(start, 9);
-    /// ring.commit_write(start, 1);
-    ///
-    /// let start = ring.claim_read(1)?;
-    /// ring.commit_read(start, 1);
+    /// let mut grant = ring.write_up_to(4)?;
+    /// grant.write(1)?;
     /// # Ok::<(), mangonel_ring::Error>(())
     /// ```
-    pub fn commit_read(&self, index: usize, batch_size: usize) {
-        let tail = &self.inner.consumer_tail;
-        let backoff = Backoff::new();
-        while tail.load(Ordering::Acquire) != index {
-            backoff.snooze();
+    pub fn write_up_to(&self, batch_size: usize) -> Result<WriteGrant<'_, T>, Error> {
+        let (size, index) = self.claim_write(batch_size, false)?;
+
+        Ok(WriteGrant::new(self, size, index))
+    }
+
+    /// Grants exactly `batch_size` free slots for writing,
+    /// or none. Readers see them once the grant is dropped.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidBatchSize`] if `batch_size` is 0
+    ///   or larger than the ring.
+    /// - [`Error::Insufficient`] if fewer than `batch_size`
+    ///   slots are free.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::mpmc::Ring;
+    ///
+    /// let ring = Ring::<u32>::new(8)?;
+    /// let mut grant = ring.write_exact(1)?;
+    /// grant.write(1)?;
+    /// # Ok::<(), mangonel_ring::Error>(())
+    /// ```
+    pub fn write_exact(&self, batch_size: usize) -> Result<WriteGrant<'_, T>, Error> {
+        let (size, index) = self.claim_write(batch_size, true)?;
+
+        Ok(WriteGrant::new(self, size, index))
+    }
+
+    /// Grants as many committed items as are available, up
+    /// to `batch_size`, for reading. Their slots are freed
+    /// once the grant is dropped.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidBatchSize`] if `batch_size` is 0
+    ///   or larger than the ring.
+    /// - [`Error::Insufficient`] if no item is available.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::mpmc::Ring;
+    ///
+    /// let ring = Ring::<u32>::new(8)?;
+    /// ring.write_exact(1)?.write(7)?;
+    ///
+    /// let mut grant = ring.read_up_to(4)?;
+    /// assert_eq!(*grant.read()?, 7);
+    /// # Ok::<(), mangonel_ring::Error>(())
+    /// ```
+    pub fn read_up_to(&self, batch_size: usize) -> Result<ReadGrant<'_, T>, Error> {
+        let (size, index) = self.claim_read(batch_size, false)?;
+
+        Ok(ReadGrant::new(self, size, index))
+    }
+
+    /// Grants exactly `batch_size` committed items for
+    /// reading, or none. Their slots are freed once the
+    /// grant is dropped.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidBatchSize`] if `batch_size` is 0
+    ///   or larger than the ring.
+    /// - [`Error::Insufficient`] if fewer than `batch_size`
+    ///   items are available.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::mpmc::Ring;
+    ///
+    /// let ring = Ring::<u32>::new(8)?;
+    /// ring.write_exact(1)?.write(7)?;
+    ///
+    /// let mut grant = ring.read_exact(1)?;
+    /// assert_eq!(*grant.read()?, 7);
+    /// # Ok::<(), mangonel_ring::Error>(())
+    /// ```
+    pub fn read_exact(&self, batch_size: usize) -> Result<ReadGrant<'_, T>, Error> {
+        let (size, index) = self.claim_read(batch_size, true)?;
+
+        Ok(ReadGrant::new(self, size, index))
+    }
+}
+
+pub struct WriteGrant<'a, T> {
+    ring: &'a Ring<T>,
+    size: usize,
+    start: usize,
+    end: usize,
+    current: usize,
+}
+
+impl<'a, T> Drop for WriteGrant<'a, T> {
+    /// Commits the whole claim. Slots never written still
+    /// publish whatever they held before.
+    fn drop(&mut self) {
+        let written = self.current.wrapping_sub(self.start);
+        if written != self.size {
+            eprintln!(
+                "warning: write grant dropped after writing {written} of {} granted slots; \
+                 consumers will read stale values",
+                self.size
+            );
         }
-        tail.store(index.wrapping_add(batch_size), Ordering::Release);
+
+        self.ring.commit_write(self.size, self.start);
+    }
+}
+
+impl<'a, T> WriteGrant<'a, T> {
+    fn new(ring: &'a Ring<T>, size: usize, index: usize) -> Self {
+        Self {
+            ring,
+            size,
+            start: index,
+            end: index.wrapping_add(size),
+            current: index,
+        }
+    }
+
+    /// Writes `value` into the next granted slot. Readers
+    /// see it once this `WriteGrant` is dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::GrantExhausted`] if every granted slot has
+    /// been written.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::mpmc::Ring;
+    ///
+    /// let ring = Ring::<u32>::new(8)?;
+    /// let mut grant = ring.write_exact(1)?;
+    /// grant.write(7)?;
+    /// # Ok::<(), mangonel_ring::Error>(())
+    /// ```
+    pub fn write(&mut self, value: T) -> Result<(), Error> {
+        if self.current == self.end {
+            return Err(Error::GrantExhausted(self.size));
+        }
+
+        self.ring.write_at(self.current, value);
+        self.current = self.current.wrapping_add(1);
+
+        Ok(())
+    }
+}
+
+pub struct ReadGrant<'a, T> {
+    ring: &'a Ring<T>,
+    size: usize,
+    start: usize,
+    end: usize,
+    current: usize,
+}
+
+impl<'a, T> Drop for ReadGrant<'a, T> {
+    /// Commits the whole claim. Items never read are
+    /// skipped and their slots freed for producers.
+    fn drop(&mut self) {
+        let read = self.current.wrapping_sub(self.start);
+        if read != self.size {
+            eprintln!(
+                "warning: read grant dropped after reading {read} of {} granted items; \
+                 the rest are lost",
+                self.size
+            );
+        }
+
+        self.ring.commit_read(self.size, self.start);
+    }
+}
+
+impl<'a, T> ReadGrant<'a, T> {
+    fn new(ring: &'a Ring<T>, size: usize, index: usize) -> Self {
+        Self {
+            ring,
+            size,
+            start: index,
+            end: index.wrapping_add(size),
+            current: index,
+        }
+    }
+
+    /// The item in the next granted slot. Its slot is
+    /// freed for producers once this `ReadGrant` is dropped,
+    /// so the reference cannot outlive it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::GrantExhausted`] if every granted slot has
+    /// been read.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::mpmc::Ring;
+    ///
+    /// let ring = Ring::<u32>::new(8)?;
+    /// ring.write_exact(1)?.write(7)?;
+    ///
+    /// let mut grant = ring.read_exact(1)?;
+    /// assert_eq!(*grant.read()?, 7);
+    /// # Ok::<(), mangonel_ring::Error>(())
+    /// ```
+    pub fn read(&mut self) -> Result<&T, Error> {
+        if self.current == self.end {
+            return Err(Error::GrantExhausted(self.size));
+        }
+
+        let value = self.ring.read_at(self.current);
+        self.current = self.current.wrapping_add(1);
+
+        Ok(value)
     }
 }
 

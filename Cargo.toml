@@ -24,6 +24,8 @@ mangonel-ring = { path = "mangonel-ring" }
 
 # default-features = false throughout; each crate turns on the
 # features it needs.
+criterion = { version = "0.8", default-features = false }
+crossbeam-queue = { version = "0.3", default-features = false }
 crossbeam-utils = { version = "0.8", default-features = false }
 left-right = { version = "0.11", default-features = false }
 libc = { version = "0.2", default-features = false }

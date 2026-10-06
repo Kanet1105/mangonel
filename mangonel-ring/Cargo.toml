@@ -8,5 +8,13 @@ license = { workspace = true }
 crossbeam-utils = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+criterion = { workspace = true, features = ["cargo_bench_support"] }
+crossbeam-queue = { workspace = true, features = ["std"] }
+
+[[bench]]
+name = "mpmc"
+harness = false
+
 [lints]
 workspace = true

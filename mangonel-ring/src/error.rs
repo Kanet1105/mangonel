@@ -6,9 +6,9 @@ pub enum Error {
     #[error("batch size {batch_size} must be 1 to {ring_size}, the ring size")]
     InvalidBatchSize { batch_size: usize, ring_size: usize },
 
-    #[error("not enough free slots: requested {requested}, available {available}")]
-    InsufficientSpace { requested: usize, available: usize },
+    #[error("requested {requested} slots, but only {available} are available")]
+    Insufficient { requested: usize, available: usize },
 
-    #[error("not enough items: requested {requested}, available {available}")]
-    InsufficientItems { requested: usize, available: usize },
+    #[error("all {0} granted slots have been used")]
+    GrantExhausted(usize),
 }
