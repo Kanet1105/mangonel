@@ -41,6 +41,25 @@ impl<T> Default for Ring<T> {
 }
 
 impl<T> Ring<T> {
+    /// A ring of `size` slots.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::IsNotPowerOfTwo`] if `size` is not a power
+    /// of two.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::{Error, Ring};
+    ///
+    /// let ring = Ring::<u64>::new(64)?;
+    /// assert!(matches!(
+    ///     Ring::<u64>::new(100),
+    ///     Err(Error::IsNotPowerOfTwo(100))
+    /// ));
+    /// # Ok::<(), Error>(())
+    /// ```
     pub fn new(size: usize) -> Result<Self, Error> {
         if !size.is_power_of_two() {
             return Err(Error::IsNotPowerOfTwo(size));
@@ -69,6 +88,27 @@ impl<T> Ring<T> {
         Ok(self.inner.size.min(n))
     }
 
+    /// Claims up to `n` free slots for writing. Dropping
+    /// the grant publishes them, and later grants wait
+    /// for that, so drop it promptly.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ZeroClaimSize`] if `n` is 0, or
+    /// [`Error::RingIsFull`] if no slot is free.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::{Error, Ring};
+    ///
+    /// let ring = Ring::new(4)?;
+    /// for (slot, value) in ring.bulk_write(4)?.zip([1, 2, 3, 4]) {
+    ///     *slot = Some(value);
+    /// }
+    /// assert!(matches!(ring.bulk_write(1), Err(Error::RingIsFull)));
+    /// # Ok::<(), Error>(())
+    /// ```
     pub fn bulk_write(&self, n: usize) -> Result<BulkWrite<'_, T>, Error> {
         let want = self.validate_claim_size(n)?;
         let ring_size = self.inner.size;
@@ -104,6 +144,31 @@ impl<T> Ring<T> {
         }
     }
 
+    /// Claims up to `n` published slots for reading.
+    /// Dropping the grant frees them, dropping any
+    /// value left unread, and later grants wait for
+    /// that, so drop it promptly.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ZeroClaimSize`] if `n` is 0, or
+    /// [`Error::RingIsEmpty`] if no slot is published.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mangonel_ring::{Error, Ring};
+    ///
+    /// let ring = Ring::new(4)?;
+    /// for (slot, value) in ring.bulk_write(2)?.zip([1, 2]) {
+    ///     *slot = Some(value);
+    /// }
+    ///
+    /// let values: Vec<_> = ring.bulk_read(4)?.collect();
+    /// assert_eq!(values, [1, 2]);
+    /// assert!(matches!(ring.bulk_read(1), Err(Error::RingIsEmpty)));
+    /// # Ok::<(), Error>(())
+    /// ```
     pub fn bulk_read(&self, n: usize) -> Result<BulkRead<'_, T>, Error> {
         let want = self.validate_claim_size(n)?;
         let head = &self.inner.consumer_head;
