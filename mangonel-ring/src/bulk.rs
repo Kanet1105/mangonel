@@ -1,5 +1,8 @@
 use crate::Ring;
 
+/// Free slots claimed by [`Ring::bulk_write`], yielded once
+/// each for writing. Dropping it publishes them all; a slot
+/// left `None` reads as a gap.
 pub struct BulkWrite<'a, T> {
     ring: &'a Ring<T>,
     size: usize,
@@ -16,6 +19,8 @@ impl<'a, T> Drop for BulkWrite<'a, T> {
 impl<'a, T> Iterator for BulkWrite<'a, T> {
     type Item = &'a mut Option<T>;
 
+    /// The slot must not be touched after this grant drops,
+    /// since readers may then claim it.
     fn next(&mut self) -> Option<Self::Item> {
         if self.current == self.cached.wrapping_add(self.size) {
             None
@@ -41,6 +46,9 @@ impl<'a, T> BulkWrite<'a, T> {
     }
 }
 
+/// Published slots claimed by [`Ring::bulk_read`], yielded
+/// once each as owned values. Dropping it frees them all,
+/// dropping any value left unread.
 pub struct BulkRead<'a, T> {
     ring: &'a Ring<T>,
     size: usize,
