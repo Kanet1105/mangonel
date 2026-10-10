@@ -5,6 +5,7 @@ members = [
     "mangonel-libxdp",
     "mangonel-libxdp-sys",
     "mangonel-nic",
+    "mangonel-ring",
 ]
 
 # Matches libxdp, which mangonel links against. See LICENSE.
@@ -18,6 +19,7 @@ mangonel-nic = { path = "mangonel-nic" }
 
 # default-features = false throughout; each crate turns on the
 # features it needs.
+crossbeam-utils = { version = "0.8", default-features = false }
 libc = { version = "0.2", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 tracing = { version = "0.1", default-features = false }

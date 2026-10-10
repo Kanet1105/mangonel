@@ -1,0 +1,12 @@
+[package]
+name = "mangonel-ring"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+crossbeam-utils = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
