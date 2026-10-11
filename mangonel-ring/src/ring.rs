@@ -1,5 +1,6 @@
 use std::{
     cell::UnsafeCell,
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -35,6 +36,22 @@ impl<T> Clone for Ring<T> {
         Self {
             inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+// Slots are left out: another thread's grant may own one.
+impl<T> fmt::Debug for Ring<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let inner = &self.inner;
+        let load = |index: &AtomicUsize| index.load(Ordering::Relaxed);
+
+        f.debug_struct("Ring")
+            .field("size", &inner.size)
+            .field("producer_head", &load(&inner.producer_head))
+            .field("producer_tail", &load(&inner.producer_tail))
+            .field("consumer_head", &load(&inner.consumer_head))
+            .field("consumer_tail", &load(&inner.consumer_tail))
+            .finish_non_exhaustive()
     }
 }
 

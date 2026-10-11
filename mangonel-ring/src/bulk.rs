@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::{Error, Ring};
 
 /// Free slots claimed by [`Ring::bulk_write`], filled in
@@ -14,6 +16,16 @@ pub struct BulkWrite<'a, T> {
 impl<'a, T> Drop for BulkWrite<'a, T> {
     fn drop(&mut self) {
         self.ring.commit_write(self);
+    }
+}
+
+impl<'a, T> fmt::Debug for BulkWrite<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BulkWrite")
+            .field("start", &self.start)
+            .field("current", &self.current)
+            .field("end", &self.end)
+            .finish_non_exhaustive()
     }
 }
 
@@ -75,6 +87,16 @@ pub struct BulkRead<'a, T> {
 impl<'a, T> Drop for BulkRead<'a, T> {
     fn drop(&mut self) {
         self.ring.commit_read(self)
+    }
+}
+
+impl<'a, T> fmt::Debug for BulkRead<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BulkRead")
+            .field("start", &self.start)
+            .field("current", &self.current)
+            .field("end", &self.end)
+            .finish_non_exhaustive()
     }
 }
 
