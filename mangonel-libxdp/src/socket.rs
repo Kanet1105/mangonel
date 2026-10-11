@@ -147,7 +147,7 @@ pub struct SocketConfig {
 
 /// One bound AF_XDP queue: receive and transmit over its
 /// four rings, recycling frames through the umem's shared
-/// frame ring. Private: it is
+/// frame pool. Private: it is
 /// only ever driven through [`XdpSocket`] or the
 /// [`XdpSender`] and [`XdpReceiver`] halves that share it,
 /// whose `&mut self` methods are what give each ring a
@@ -218,7 +218,7 @@ impl Socket {
         value == 0 && options.flags & XDP_OPTIONS_ZEROCOPY != 0
     }
 
-    /// Tops the fill ring up from the umem's ring.
+    /// Tops the fill ring up from the umem's pool.
     fn fill(&self) {
         // Clamp to the ring's free space: an unclamped
         // all-or-nothing claim would starve RX in bursts.
@@ -240,7 +240,7 @@ impl Socket {
         while offset < claimed {
             let address = grant
                 .read()
-                .expect("The frame ring has a gap: every writer fills its grant. This is a bug.");
+                .expect("The frame pool has a gap: every writer fills its grant. This is a bug.");
             self.fill_ring
                 .write_fill_address(index.wrapping_add(offset), address);
             offset += 1;
@@ -310,7 +310,7 @@ impl Socket {
         claimed
     }
 
-    /// Returns every completed tx frame to the umem's ring.
+    /// Returns every completed tx frame to the umem's pool.
     fn complete(&self) {
         let (claimed, index) = self.completion_ring.claim(self.completion_ring.size());
         if claimed == 0 {
@@ -320,16 +320,14 @@ impl Socket {
         let pool = Umem::global().pool();
         let mut offset: u32 = 0;
         while offset < claimed {
-            // Each frame out of the ring has a free slot, so
+            // Each frame out of the pool has a free slot, so
             // a failed or short claim only waits on a reader
             // yet to commit.
-            let Ok(mut grant) = Umem::global()
-                .pool()
-                .bulk_write((claimed - offset) as usize)
-            else {
+            let Ok(mut grant) = pool.bulk_write((claimed - offset) as usize) else {
                 spin_loop();
                 continue;
             };
+
             for _ in 0..grant.size() {
                 grant
                     .write(
