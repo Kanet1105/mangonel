@@ -339,8 +339,8 @@ fn control_socket(name: &str) -> Result<OwnedFd, Error> {
 #[allow(clippy::cast_possible_wrap)]
 fn ifreq(iface: &str) -> libc::ifreq {
     let mut req: libc::ifreq = unsafe { zeroed() };
-    // Length is checked against IFNAMSIZ in Nic::open, so this
-    // cannot overrun.
+    // Length is checked against IFNAMSIZ in Nic::open, so
+    // this cannot overrun.
     for (dst, byte) in req.ifr_name.iter_mut().zip(iface.as_bytes()) {
         *dst = *byte as c_char;
     }
@@ -371,9 +371,9 @@ fn ioctl_ifreq(
 fn hwaddr(sock: &OwnedFd, name: &str) -> Result<[u8; 6], Error> {
     let mut req = ifreq(name);
     ioctl_ifreq(sock, "SIOCGIFHWADDR", libc::SIOCGIFHWADDR, name, &mut req)?;
-    // sa_data holds the link-layer address; only the first 6
-    // bytes matter for Ethernet, and non-Ethernet links
-    // simply report a shorter address here.
+    // sa_data holds the link-layer address; only the first
+    // 6 bytes matter for Ethernet, and non-Ethernet
+    // links simply report a shorter address here.
     let data = unsafe { req.ifr_ifru.ifru_hwaddr.sa_data };
     let mut mac = [0u8; 6];
     for (dst, src) in mac.iter_mut().zip(data) {
@@ -657,17 +657,18 @@ mod tests {
         assert_eq!(channel_counts(&channels_with(0, 0, 8), 4), (0, 0, 4));
         // Dedicated rx/tx channels get N of each.
         assert_eq!(channel_counts(&channels_with(4, 4, 0), 2), (2, 2, 0));
-        // Matching the current counts is what makes the ioctl a
-        // no-op.
+        // Matching the current counts is what makes the
+        // ioctl a no-op.
         assert_eq!(channel_counts(&channels_with(0, 0, 1), 1), (0, 0, 1));
         assert_eq!(channel_counts(&channels_with(1, 1, 0), 1), (1, 1, 0));
     }
 
     #[test]
     fn finds_the_default_route_in_the_route_table() {
-        // Real `/proc/net/route` output: one default route plus a
-        // container bridge route and an on-link route, neither of
-        // which is a default.
+        // Real `/proc/net/route` output: one default route
+        // plus a container bridge route and an
+        // on-link route, neither of which is a
+        // default.
         const TABLE: &str = "\
 Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
 enp5s0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0
@@ -691,16 +692,17 @@ wlan0\t00000000\t0103A8C0\t0003\t0\t0\t600\t00000000
             Some("eth0")
         );
 
-        // 0.0.0.0/8 shares the destination but has a non-zero mask,
-        // so it is not a default route.
+        // 0.0.0.0/8 shares the destination but has a
+        // non-zero mask, so it is not a default
+        // route.
         const MASKED: &str = "\
 Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask
 eth0\t00000000\t00000000\t0001\t0\t0\t0\t000000FF
 ";
         assert_eq!(default_iface_from_route_table(MASKED), None);
 
-        // Empty and malformed tables yield no answer rather than
-        // panicking.
+        // Empty and malformed tables yield no answer rather
+        // than panicking.
         assert_eq!(default_iface_from_route_table(""), None);
         assert_eq!(default_iface_from_route_table("Iface\tDestination\n"), None);
         assert_eq!(default_iface_from_route_table("header\neth0\t000\n"), None);
