@@ -220,10 +220,16 @@ impl Socket {
 
     /// Tops the fill ring up from the umem's pool.
     fn fill(&self) {
-        // Clamp to the ring's free space: an unclamped
-        // all-or-nothing claim would starve RX in bursts.
+        // Ask for at most the ring's free space: an
+        // all-or-nothing claim of the whole ring would
+        // starve RX in bursts.
         let free = self.fill_ring.free(self.fill_ring.size());
-        let Ok(mut grant) = Umem::global().pool().bulk_read(free as usize) else {
+        if free == 0 {
+            return;
+        }
+
+        let pool = Umem::global().pool();
+        let Ok(mut grant) = pool.bulk_read(free as usize) else {
             return;
         };
         let granted = u32::try_from(grant.size())
@@ -236,14 +242,12 @@ impl Socket {
             claimed == granted,
             "Fill ring free space shrank below a granted burst. This is a bug."
         );
-        let mut offset: u32 = 0;
-        while offset < claimed {
+        for offset in 0..claimed {
             let address = grant
                 .read()
                 .expect("The frame pool has a gap: every writer fills its grant. This is a bug.");
             self.fill_ring
                 .write_fill_address(index.wrapping_add(offset), address);
-            offset += 1;
         }
         // Freed before the kernel sees the frames, so none
         // can come back while their slots are still held.
@@ -263,8 +267,7 @@ impl Socket {
 
         let want = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
         let (claimed, index) = self.rx_ring.claim(want);
-        let mut offset: u32 = 0;
-        while offset < claimed {
+        for offset in 0..claimed {
             let descriptor = self.rx_ring.read_descriptor(index.wrapping_add(offset));
 
             // The one kernel input the slice accessors
@@ -277,7 +280,6 @@ impl Socket {
             );
 
             buffer[offset as usize] = XdpDescriptor::new(descriptor.addr, descriptor.len);
-            offset += 1;
         }
         self.rx_ring.commit(claimed);
 
@@ -293,15 +295,13 @@ impl Socket {
         // ring can seat the whole batch.
         let free = self.tx_ring.free(want).min(want);
         let (claimed, tx_index) = self.tx_ring.claim(free);
-        let mut offset: u32 = 0;
-        while offset < claimed {
+        for offset in 0..claimed {
             let descriptor = &buffer[offset as usize];
             self.tx_ring.write_descriptor(
                 tx_index.wrapping_add(offset),
                 descriptor.address(),
                 descriptor.length(),
             );
-            offset += 1;
         }
         self.tx_ring.commit(claimed);
         self.kick();
