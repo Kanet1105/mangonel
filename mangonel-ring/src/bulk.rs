@@ -6,10 +6,9 @@ use crate::{Error, Ring};
 #[must_use = "dropping the grant commits it"]
 pub struct BulkWrite<'a, T> {
     ring: &'a Ring<T>,
-    size: usize,
-    start: usize,
-    current: usize,
-    end: usize,
+    pub(crate) start: usize,
+    pub(crate) current: usize,
+    pub(crate) end: usize,
 }
 
 impl<'a, T> Drop for BulkWrite<'a, T> {
@@ -22,20 +21,15 @@ impl<'a, T> BulkWrite<'a, T> {
     pub(crate) fn new(ring: &'a Ring<T>, n: usize, index: usize) -> Self {
         Self {
             ring,
-            size: n,
             start: index,
             current: index,
             end: index.wrapping_add(n),
         }
     }
 
-    pub(crate) fn index(&self) -> usize {
-        self.start
-    }
-
     /// Slots claimed, at most the `n` asked for.
     pub fn size(&self) -> usize {
-        self.size
+        self.end.wrapping_sub(self.start)
     }
 
     /// Writes `value` into the next free slot.
@@ -65,10 +59,9 @@ impl<'a, T> BulkWrite<'a, T> {
 #[must_use = "dropping the grant commits it"]
 pub struct BulkRead<'a, T> {
     ring: &'a Ring<T>,
-    size: usize,
-    start: usize,
-    current: usize,
-    end: usize,
+    pub(crate) start: usize,
+    pub(crate) current: usize,
+    pub(crate) end: usize,
 }
 
 impl<'a, T> Drop for BulkRead<'a, T> {
@@ -81,21 +74,16 @@ impl<'a, T> BulkRead<'a, T> {
     pub(crate) fn new(ring: &'a Ring<T>, n: usize, index: usize) -> Self {
         Self {
             ring,
-            size: n,
             start: index,
             current: index,
             end: index.wrapping_add(n),
         }
     }
 
-    pub(crate) fn index(&self) -> usize {
-        self.start
-    }
-
     /// Slots claimed, gaps included, at most the `n`
     /// asked for.
     pub fn size(&self) -> usize {
-        self.size
+        self.end.wrapping_sub(self.start)
     }
 
     /// Takes the next value, skipping gaps, or `None`

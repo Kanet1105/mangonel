@@ -10,9 +10,6 @@ use crossbeam_utils::{Backoff, CachePadded};
 
 use crate::{BulkRead, BulkWrite, Error};
 
-pub const DEFAULT_RING_SIZE: usize = 4096;
-
-#[derive(Clone)]
 pub struct Ring<T> {
     inner: Arc<RingInner<T>>,
 }
@@ -33,10 +30,11 @@ struct RingInner<T> {
 // shared.
 unsafe impl<T: Send> Sync for RingInner<T> {}
 
-impl<T> Default for Ring<T> {
-    fn default() -> Self {
-        Self::new(DEFAULT_RING_SIZE)
-            .expect("Default ring size is not the power of two. This is a bug.")
+impl<T> Clone for Ring<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
     }
 }
 
@@ -206,44 +204,41 @@ impl<T> Ring<T> {
         }
     }
 
-    /// # Safety
-    ///
-    /// The pointer may be dereferenced only while the caller's
-    /// grant claims `index`, with no other reference into the
-    /// slot alive.
-    pub(crate) unsafe fn slot(&self, index: usize) -> *mut Option<T> {
+    /// The slot at `index`. Dereference it only while the
+    /// caller's grant claims `index`, with no other reference
+    /// into the slot alive.
+    pub(crate) fn slot(&self, index: usize) -> *mut Option<T> {
         self.inner.slots[index & self.inner.mask].get()
     }
 
     /// Publishes the grant's slots, once earlier grants
     /// are published. Called by the grant's `Drop`.
     pub(crate) fn commit_write(&self, bulk_write: &BulkWrite<'_, T>) {
-        let n = bulk_write.size();
-        let index = bulk_write.index();
         let tail = &self.inner.producer_tail;
         let backoff = Backoff::new();
-        while tail.load(Ordering::Acquire) != index {
+        while tail.load(Ordering::Acquire) != bulk_write.start {
             backoff.snooze();
         }
-        tail.store(index.wrapping_add(n), Ordering::Release);
+        tail.store(bulk_write.end, Ordering::Release);
     }
 
     /// Frees the grant's slots, dropping any value left
     /// unread, once earlier grants are freed. Called by
     /// the grant's `Drop`.
     pub(crate) fn commit_read(&self, bulk_read: &BulkRead<'_, T>) {
-        let n = bulk_read.size();
-        let index = bulk_read.index();
-        for offset in 0..n {
-            let item = unsafe { &mut *self.slot(index.wrapping_add(offset)) };
-            item.take();
+        let mut index = bulk_read.current;
+        while index != bulk_read.end {
+            // SAFETY: the claim keeps producers off the slot
+            // until the tail store below.
+            unsafe { *self.slot(index) = None };
+            index = index.wrapping_add(1);
         }
 
         let tail = &self.inner.consumer_tail;
         let backoff = Backoff::new();
-        while tail.load(Ordering::Acquire) != index {
+        while tail.load(Ordering::Acquire) != bulk_read.start {
             backoff.snooze();
         }
-        tail.store(index.wrapping_add(n), Ordering::Release);
+        tail.store(bulk_read.end, Ordering::Release);
     }
 }
