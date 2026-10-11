@@ -43,22 +43,22 @@ fn max_frame_size() -> Result<u32, UmemError> {
     u32::try_from(value).map_err(|_| UmemError::PageSize { value })
 }
 
-// Shallow: clones share one kernel umem, area and ring, and
+// Shallow: clones share one kernel umem, area and pool, and
 // nothing here frees them.
 #[derive(Clone)]
 pub(crate) struct Umem {
     umem: NonNull<xsk_umem>,
     area: UmemArea,
     config: xsk_umem_config,
-    ring: Ring<u64>,
+    pool: Ring<u64>,
 }
 
 // SAFETY: The kernel umem has no thread affinity, and the
-// area and ring are `Send`.
+// area and pool are `Send`.
 unsafe impl Send for Umem {}
 
 // SAFETY: The kernel umem pointer is read-only after
-// `new`, and the area and ring are `Sync`.
+// `new`, and the area and pool are `Sync`.
 unsafe impl Sync for Umem {}
 
 /// The one umem every socket shares, set by
@@ -78,7 +78,7 @@ impl Umem {
             return Err(UmemError::FrameSizeNotPowerOfTwo { frame_size });
         }
 
-        // The ring rounds its capacity up to a power of two
+        // The pool rounds its capacity up to a power of two
         // no larger than this.
         if frame_count == 0 || frame_count > MAX_FRAME_COUNT {
             return Err(UmemError::FrameCountOutOfRange {
@@ -110,11 +110,11 @@ impl Umem {
                 .ok_or(UmemError::AreaTooLarge)?;
         }
 
-        // Every frame starts in the ring. Seeded before the
+        // Every frame starts in the pool. Seeded before the
         // area and kernel umem exist, so an error here has
         // nothing to free.
-        let ring = Ring::new((frame_count as usize).next_power_of_two())?;
-        let mut grant = ring.bulk_write(frame_count as usize)?;
+        let pool = Ring::new((frame_count as usize).next_power_of_two())?;
+        let mut grant = pool.bulk_write(frame_count as usize)?;
         for frame in 0..frame_count {
             grant.write(u64::from(frame) * u64::from(frame_size))?;
         }
@@ -159,7 +159,7 @@ impl Umem {
                 .expect("xsk_umem__create returned a null pointer. This is a bug."),
             area,
             config,
-            ring,
+            pool,
         })
     }
 
@@ -190,8 +190,8 @@ impl Umem {
         &self.config
     }
 
-    pub(crate) fn ring(&self) -> &Ring<u64> {
-        &self.ring
+    pub(crate) fn pool(&self) -> &Ring<u64> {
+        &self.pool
     }
 
     /// Frames the area holds.
@@ -317,7 +317,7 @@ pub enum UmemError {
     #[error("Failed to delete Umem: {0}")]
     Delete(io::Error),
 
-    #[error("Failed to seed the frame ring: {0}")]
+    #[error("Failed to seed the frame pool: {0}")]
     Ring(#[from] mangonel_ring::Error),
 
     #[error("The {length} bytes at '{address}' fall outside the {area_length}-byte umem area.")]

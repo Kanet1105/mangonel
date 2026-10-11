@@ -223,7 +223,7 @@ impl Socket {
         // Clamp to the ring's free space: an unclamped
         // all-or-nothing claim would starve RX in bursts.
         let free = self.fill_ring.free(self.fill_ring.size());
-        let Ok(mut grant) = Umem::global().ring().bulk_read(free as usize) else {
+        let Ok(mut grant) = Umem::global().pool().bulk_read(free as usize) else {
             return;
         };
         let granted = u32::try_from(grant.size())
@@ -261,9 +261,7 @@ impl Socket {
         // Frames are power-of-two sized.
         let frame_mask = u64::from(Umem::global().config().frame_size - 1);
 
-        let want = u32::try_from(buffer.len())
-            .unwrap_or(u32::MAX)
-            .min(self.rx_ring.size());
+        let want = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
         let (claimed, index) = self.rx_ring.claim(want);
         let mut offset: u32 = 0;
         while offset < claimed {
@@ -283,22 +281,20 @@ impl Socket {
         }
         self.rx_ring.commit(claimed);
 
-        offset
+        claimed
     }
 
     /// Backs [`XdpSender::send`]; `&self` as
     /// [`Self::receive`].
     fn send(&self, buffer: &mut [XdpDescriptor]) -> u32 {
-        let size = u32::try_from(buffer.len())
-            .unwrap_or(u32::MAX)
-            .min(self.tx_ring.size());
+        let want = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
         // Clamp to the ring's free space: an unclamped
         // all-or-nothing claim makes no progress until the
         // ring can seat the whole batch.
-        let request = size.min(self.tx_ring.free(size));
-        let (written, tx_index) = self.tx_ring.claim(request);
+        let free = self.tx_ring.free(want).min(want);
+        let (claimed, tx_index) = self.tx_ring.claim(free);
         let mut offset: u32 = 0;
-        while offset < written {
+        while offset < claimed {
             let descriptor = &buffer[offset as usize];
             self.tx_ring.write_descriptor(
                 tx_index.wrapping_add(offset),
@@ -307,30 +303,31 @@ impl Socket {
             );
             offset += 1;
         }
-        self.tx_ring.commit(written);
+        self.tx_ring.commit(claimed);
         self.kick();
-        // Nothing else returns tx frames to the ring.
         self.complete();
 
-        written
+        claimed
     }
 
     /// Returns every completed tx frame to the umem's ring.
     fn complete(&self) {
-        let (filled, index) = self.completion_ring.claim(self.completion_ring.size());
-        if filled == 0 {
+        let (claimed, index) = self.completion_ring.claim(self.completion_ring.size());
+        if claimed == 0 {
             return;
         }
 
-        let ring = Umem::global().ring();
+        let pool = Umem::global().pool();
         let mut offset: u32 = 0;
-        while offset < filled {
+        while offset < claimed {
             // Each frame out of the ring has a free slot, so
             // a failed or short claim only waits on a reader
             // yet to commit.
-            let Ok(mut grant) = ring.bulk_write((filled - offset) as usize) else {
+            let Ok(mut grant) = Umem::global()
+                .pool()
+                .bulk_write((claimed - offset) as usize)
+            else {
                 spin_loop();
-
                 continue;
             };
             for _ in 0..grant.size() {
@@ -343,7 +340,7 @@ impl Socket {
                 offset += 1;
             }
         }
-        self.completion_ring.commit(filled);
+        self.completion_ring.commit(claimed);
     }
 
     /// Wakes the driver; non-blocking, carries no data.
