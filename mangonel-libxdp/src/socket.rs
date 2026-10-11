@@ -218,21 +218,57 @@ impl Socket {
         value == 0 && options.flags & XDP_OPTIONS_ZEROCOPY != 0
     }
 
+    /// Tops the fill ring up from the umem's ring.
+    fn fill(&self) {
+        // Clamp to the ring's free space: an unclamped
+        // all-or-nothing claim would starve RX in bursts.
+        let free = self.fill_ring.free(self.fill_ring.size());
+        let Ok(mut grant) = Umem::global().ring().bulk_read(free as usize) else {
+            return;
+        };
+        let granted = u32::try_from(grant.size())
+            .expect("A grant exceeded the u32 it was asked for. This is a bug.");
+
+        // The kernel only consumes fill entries, so the
+        // free space checked above cannot shrink.
+        let (claimed, index) = self.fill_ring.claim(granted);
+        assert!(
+            claimed == granted,
+            "Fill ring free space shrank below a granted burst. This is a bug."
+        );
+        let mut offset: u32 = 0;
+        while offset < claimed {
+            let address = grant
+                .read()
+                .expect("The frame ring has a gap: every writer fills its grant. This is a bug.");
+            self.fill_ring
+                .write_fill_address(index.wrapping_add(offset), address);
+            offset += 1;
+        }
+        // Freed before the kernel sees the frames, so none
+        // can come back while their slots are still held.
+        drop(grant);
+        self.fill_ring.commit(claimed);
+    }
+
     /// Backs [`XdpReceiver::receive`]. `&self` only because
     /// the halves share this socket; the caller's
     /// `&mut self` is the exclusivity.
     fn receive(&self, buffer: &mut [XdpDescriptor]) -> u32 {
-        let size = u32::try_from(buffer.len())
-            .unwrap_or(u32::MAX)
-            .min(self.rx_ring.size());
         self.fill();
         self.poll();
-        let (available, index) = self.rx_ring.claim(size);
+
         // Frames are power-of-two sized.
         let frame_mask = u64::from(Umem::global().config().frame_size - 1);
+
+        let want = u32::try_from(buffer.len())
+            .unwrap_or(u32::MAX)
+            .min(self.rx_ring.size());
+        let (claimed, index) = self.rx_ring.claim(want);
         let mut offset: u32 = 0;
-        while offset < available {
+        while offset < claimed {
             let descriptor = self.rx_ring.read_descriptor(index.wrapping_add(offset));
+
             // The one kernel input the slice accessors
             // trust: a packet crossing its
             // frame boundary would alias
@@ -241,10 +277,11 @@ impl Socket {
                 (descriptor.addr & frame_mask) + u64::from(descriptor.len) <= frame_mask + 1,
                 "The kernel returned an rx descriptor crossing its frame boundary. This is a bug."
             );
+
             buffer[offset as usize] = XdpDescriptor::new(descriptor.addr, descriptor.len);
             offset += 1;
         }
-        self.rx_ring.commit(offset);
+        self.rx_ring.commit(claimed);
 
         offset
     }
@@ -276,40 +313,6 @@ impl Socket {
         self.complete();
 
         written
-    }
-
-    /// Tops the fill ring up from the umem's ring.
-    fn fill(&self) {
-        // Clamp to the ring's free space: an unclamped
-        // all-or-nothing claim would starve RX in bursts.
-        let ring_size = self.fill_ring.size();
-        let want = ring_size.min(self.fill_ring.free(ring_size));
-        let Ok(mut grant) = Umem::global().ring().bulk_read(want as usize) else {
-            return;
-        };
-        let count = u32::try_from(grant.size())
-            .expect("A grant exceeded the u32 it was asked for. This is a bug.");
-
-        // The kernel only consumes fill entries, so the
-        // free space checked above cannot shrink.
-        let (available, index) = self.fill_ring.claim(count);
-        assert!(
-            available == count,
-            "Fill ring free space shrank below a granted burst. This is a bug."
-        );
-        let mut offset: u32 = 0;
-        while offset < count {
-            let address = grant
-                .read()
-                .expect("The frame ring has a gap: every writer fills its grant. This is a bug.");
-            self.fill_ring
-                .write_fill_address(index.wrapping_add(offset), address);
-            offset += 1;
-        }
-        // Freed before the kernel sees the frames, so none
-        // can come back while their slots are still held.
-        drop(grant);
-        self.fill_ring.commit(count);
     }
 
     /// Returns every completed tx frame to the umem's ring.
