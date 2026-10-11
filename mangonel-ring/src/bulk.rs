@@ -14,7 +14,7 @@ pub struct BulkWrite<'a, T> {
 
 impl<'a, T> Drop for BulkWrite<'a, T> {
     fn drop(&mut self) {
-        self.ring.commit_write(self.size, self.start);
+        self.ring.commit_write(self);
     }
 }
 
@@ -27,6 +27,10 @@ impl<'a, T> BulkWrite<'a, T> {
             current: index,
             end: index.wrapping_add(n),
         }
+    }
+
+    pub(crate) fn index(&self) -> usize {
+        self.start
     }
 
     pub fn size(&self) -> usize {
@@ -63,7 +67,7 @@ pub struct BulkRead<'a, T> {
 
 impl<'a, T> Drop for BulkRead<'a, T> {
     fn drop(&mut self) {
-        self.ring.commit_read(self.size, self.start)
+        self.ring.commit_read(self)
     }
 }
 
@@ -76,6 +80,10 @@ impl<'a, T> BulkRead<'a, T> {
             current: index,
             end: index.wrapping_add(n),
         }
+    }
+
+    pub(crate) fn index(&self) -> usize {
+        self.start
     }
 
     pub fn size(&self) -> usize {

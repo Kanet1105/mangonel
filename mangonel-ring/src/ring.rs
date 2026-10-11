@@ -215,9 +215,11 @@ impl<T> Ring<T> {
         self.inner.slots[index & self.inner.mask].get()
     }
 
-    /// Publishes the `n` slots claimed at `index`, once
-    /// earlier claims are published.
-    pub(crate) fn commit_write(&self, n: usize, index: usize) {
+    /// Publishes the grant's slots, once earlier grants
+    /// are published. Called by the grant's `Drop`.
+    pub(crate) fn commit_write(&self, bulk_write: &BulkWrite<'_, T>) {
+        let n = bulk_write.size();
+        let index = bulk_write.index();
         let tail = &self.inner.producer_tail;
         let backoff = Backoff::new();
         while tail.load(Ordering::Acquire) != index {
@@ -226,10 +228,12 @@ impl<T> Ring<T> {
         tail.store(index.wrapping_add(n), Ordering::Release);
     }
 
-    /// Frees the `n` slots claimed at `index`, dropping
-    /// any value left unread, once earlier claims are
-    /// freed.
-    pub(crate) fn commit_read(&self, n: usize, index: usize) {
+    /// Frees the grant's slots, dropping any value left
+    /// unread, once earlier grants are freed. Called by
+    /// the grant's `Drop`.
+    pub(crate) fn commit_read(&self, bulk_read: &BulkRead<'_, T>) {
+        let n = bulk_read.size();
+        let index = bulk_read.index();
         for offset in 0..n {
             let item = unsafe { &mut *self.slot(index.wrapping_add(offset)) };
             item.take();
