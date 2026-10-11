@@ -8,12 +8,21 @@ use crate::umem::Umem;
 #[derive(Debug, Default)]
 pub struct XdpDescriptor {
     /// Offset of the frame within the umem area.
-    pub(crate) address: u64,
+    address: u64,
     /// Frame length in bytes.
-    pub(crate) length: u32,
+    length: u32,
 }
 
 impl XdpDescriptor {
+    pub(crate) fn new(address: u64, length: u32) -> Self {
+        Self { address, length }
+    }
+
+    /// Offset of the frame within the umem area.
+    pub fn address(&self) -> u64 {
+        self.address
+    }
+
     /// Frame length in bytes. The slices are longer: they
     /// include the headroom ahead of the frame.
     pub fn length(&self) -> u32 {

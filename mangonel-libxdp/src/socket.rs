@@ -241,10 +241,7 @@ impl Socket {
                 (descriptor.addr & frame_mask) + u64::from(descriptor.len) <= frame_mask + 1,
                 "The kernel returned an rx descriptor crossing its frame boundary. This is a bug."
             );
-            buffer[offset as usize] = XdpDescriptor {
-                address: descriptor.addr,
-                length: descriptor.len,
-            };
+            buffer[offset as usize] = XdpDescriptor::new(descriptor.addr, descriptor.len);
             offset += 1;
         }
         self.rx_ring.commit(offset);
@@ -268,8 +265,8 @@ impl Socket {
             let descriptor = &buffer[offset as usize];
             self.tx_ring.write_descriptor(
                 tx_index.wrapping_add(offset),
-                descriptor.address,
-                descriptor.length,
+                descriptor.address(),
+                descriptor.length(),
             );
             offset += 1;
         }
