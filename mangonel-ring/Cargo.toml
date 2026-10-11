@@ -1,0 +1,20 @@
+[package]
+name = "mangonel-ring"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+crossbeam-utils = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true, features = ["cargo_bench_support"] }
+crossbeam-queue = { workspace = true, features = ["alloc"] }
+
+[[bench]]
+name = "queues"
+harness = false
+
+[lints]
+workspace = true
