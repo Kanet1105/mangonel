@@ -11,6 +11,8 @@ use crossbeam_utils::{Backoff, CachePadded};
 
 use crate::{BulkRead, BulkWrite, Error};
 
+/// A bounded MPMC ring of `T`. Clones share the same
+/// slots.
 pub struct Ring<T> {
     inner: Arc<RingInner<T>>,
 }
