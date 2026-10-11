@@ -83,14 +83,18 @@ impl<'a, T> BulkRead<'a, T> {
     }
 
     pub fn read(&mut self) -> Option<T> {
-        if self.current == self.end {
-            return None;
+        while self.current != self.end {
+            let index = self.current;
+            self.current = self.current.wrapping_add(1);
+            // SAFETY: the claim keeps producers off the slot
+            // until commit.
+            let item = unsafe { &mut *self.ring.slot(index) };
+            // A gap is a slot left unwritten; skip it.
+            if let Some(value) = item.take() {
+                return Some(value);
+            }
         }
 
-        let index = self.current;
-        self.current = self.current.wrapping_add(1);
-        let item = unsafe { &mut *self.ring.slot(index) };
-
-        item.take()
+        None
     }
 }
