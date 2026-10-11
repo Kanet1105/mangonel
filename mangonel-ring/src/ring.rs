@@ -216,18 +216,18 @@ impl<T> Ring<T> {
     pub(crate) fn commit_write(&self, bulk_write: &BulkWrite<'_, T>) {
         let tail = &self.inner.producer_tail;
         let backoff = Backoff::new();
-        while tail.load(Ordering::Acquire) != bulk_write.start {
+        while tail.load(Ordering::Acquire) != bulk_write.start() {
             backoff.snooze();
         }
-        tail.store(bulk_write.end, Ordering::Release);
+        tail.store(bulk_write.end(), Ordering::Release);
     }
 
     /// Frees the grant's slots, dropping any value left
     /// unread, once earlier grants are freed. Called by
     /// the grant's `Drop`.
     pub(crate) fn commit_read(&self, bulk_read: &BulkRead<'_, T>) {
-        let mut index = bulk_read.current;
-        while index != bulk_read.end {
+        let mut index = bulk_read.current();
+        while index != bulk_read.end() {
             // SAFETY: the claim keeps producers off the slot
             // until the tail store below.
             unsafe { *self.slot(index) = None };
@@ -236,9 +236,9 @@ impl<T> Ring<T> {
 
         let tail = &self.inner.consumer_tail;
         let backoff = Backoff::new();
-        while tail.load(Ordering::Acquire) != bulk_read.start {
+        while tail.load(Ordering::Acquire) != bulk_read.start() {
             backoff.snooze();
         }
-        tail.store(bulk_read.end, Ordering::Release);
+        tail.store(bulk_read.end(), Ordering::Release);
     }
 }

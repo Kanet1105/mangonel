@@ -6,9 +6,9 @@ use crate::{Error, Ring};
 #[must_use = "dropping the grant commits it"]
 pub struct BulkWrite<'a, T> {
     ring: &'a Ring<T>,
-    pub(crate) start: usize,
-    pub(crate) current: usize,
-    pub(crate) end: usize,
+    start: usize,
+    current: usize,
+    end: usize,
 }
 
 impl<'a, T> Drop for BulkWrite<'a, T> {
@@ -25,6 +25,14 @@ impl<'a, T> BulkWrite<'a, T> {
             current: index,
             end: index.wrapping_add(n),
         }
+    }
+
+    pub(crate) fn start(&self) -> usize {
+        self.start
+    }
+
+    pub(crate) fn end(&self) -> usize {
+        self.end
     }
 
     /// Slots claimed, at most the `n` asked for.
@@ -59,9 +67,9 @@ impl<'a, T> BulkWrite<'a, T> {
 #[must_use = "dropping the grant commits it"]
 pub struct BulkRead<'a, T> {
     ring: &'a Ring<T>,
-    pub(crate) start: usize,
-    pub(crate) current: usize,
-    pub(crate) end: usize,
+    start: usize,
+    current: usize,
+    end: usize,
 }
 
 impl<'a, T> Drop for BulkRead<'a, T> {
@@ -78,6 +86,18 @@ impl<'a, T> BulkRead<'a, T> {
             current: index,
             end: index.wrapping_add(n),
         }
+    }
+
+    pub(crate) fn start(&self) -> usize {
+        self.start
+    }
+
+    pub(crate) fn current(&self) -> usize {
+        self.current
+    }
+
+    pub(crate) fn end(&self) -> usize {
+        self.end
     }
 
     /// Slots claimed, gaps included, at most the `n`
