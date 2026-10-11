@@ -95,6 +95,14 @@ impl<T> Ring<T> {
     /// [`Error::ZeroClaimSize`] if `n` is 0, or
     /// [`Error::RingIsFull`] if no slot is free.
     ///
+    /// # Deadlocks
+    ///
+    /// A thread holding two write grants must drop them
+    /// in claim order, or the later one waits forever;
+    /// locals at the end of a scope drop in the reverse
+    /// order. A grant that is never dropped blocks every
+    /// later one.
+    ///
     /// # Examples
     ///
     /// ```
@@ -153,6 +161,14 @@ impl<T> Ring<T> {
     ///
     /// [`Error::ZeroClaimSize`] if `n` is 0, or
     /// [`Error::RingIsEmpty`] if no slot is published.
+    ///
+    /// # Deadlocks
+    ///
+    /// A thread holding two read grants must drop them
+    /// in claim order, or the later one waits forever;
+    /// locals at the end of a scope drop in the reverse
+    /// order. A grant that is never dropped blocks every
+    /// later one.
     ///
     /// # Examples
     ///
