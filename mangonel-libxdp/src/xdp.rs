@@ -2,17 +2,17 @@ use std::{
     ffi::{CString, NulError},
     io,
     ptr::{NonNull, null_mut},
+    sync::{Mutex, PoisonError},
 };
 
 use mangonel_libxdp_sys::{
     XSK_RING_PROD__DEFAULT_NUM_DESCS, XSK_UMEM__DEFAULT_FRAME_HEADROOM,
-    XSK_UMEM__DEFAULT_FRAME_SIZE, xsk_socket__create_shared, xsk_socket_config,
+    XSK_UMEM__DEFAULT_FRAME_SIZE, xsk_socket, xsk_socket__create_shared, xsk_socket_config,
     xsk_socket_config__bindgen_ty_1,
 };
 
 use crate::{
     descriptor::XdpDescriptor,
-    pool::FramePool,
     ring::{Consumer, Producer, RingError, ring_buffer},
     socket::{XdpReceiver, XdpSender, XdpSocket},
     umem::{Umem, UmemError},
@@ -27,9 +27,9 @@ pub const DEFAULT_FRAME_SIZE: u32 = XSK_UMEM__DEFAULT_FRAME_SIZE;
 pub const DEFAULT_FRAME_HEADROOM: u32 = XSK_UMEM__DEFAULT_FRAME_HEADROOM;
 
 /// What [`bind`] asks for: the depth of each direction and
-/// the umem's frame layout. The umem fields hold for every
-/// socket later sharing it through [`bind_shared`], which
-/// also takes the depths.
+/// the umem's frame layout. The depths are per socket; the
+/// layout is set by the first bind and repeated by the
+/// rest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct XdpConfig {
     /// Packets in flight on receive: sizes the rx and fill
@@ -80,7 +80,15 @@ impl XdpConfig {
     }
 }
 
-/// Binds one queue with a fresh umem laid out by `config`.
+/// Serializes socket creation and deletion: libxdp's umem
+/// bookkeeping is unsynchronized, and only the first bind
+/// may create the umem.
+pub(crate) static BIND: Mutex<()> = Mutex::new(());
+
+/// Binds one queue on the global umem, which the first
+/// call creates laid out by `config`; later calls must
+/// repeat that layout. Every socket shares the umem, so
+/// frames forward between them without copying.
 /// [`XdpSocket::split`] it to drive send and receive from
 /// different threads. Panics on broken libxdp/kernel
 /// contracts.
@@ -94,79 +102,111 @@ pub fn bind(
     // The umem mapping counts against RLIMIT_MEMLOCK.
     setrlimit().map_err(Error::Setrlimit)?;
 
-    // Rings before the umem: the umem, dropped first on
-    // error paths, is deleted while the fill/completion
-    // pair it saves at creation is alive. Each direction's
+    // Rings before the umem, which saves the
+    // fill/completion pair at creation. Each direction's
     // two rings share its depth.
     let (fill, rx) = ring_buffer(config.receive_depth)?;
     let (tx, completion) = ring_buffer(config.send_depth)?;
-    let umem = Umem::new(
-        config.frame_size,
-        config.frame_headroom,
-        config.frame_count,
-        false,
-        &fill,
-        &completion,
-    )?;
+
+    let guard = BIND.lock().unwrap_or_else(PoisonError::into_inner);
+    let socket = if let Some(umem) = Umem::existing() {
+        check_layout(umem, &config)?;
+
+        create_xsk(interface_name, queue_id, &rx, &tx, &fill, &completion, umem)?
+    } else {
+        let umem = Umem::new(
+            config.frame_size,
+            config.frame_headroom,
+            config.frame_count,
+            false,
+            &fill,
+            &completion,
+        )?;
+        match create_xsk(
+            interface_name,
+            queue_id,
+            &rx,
+            &tx,
+            &fill,
+            &completion,
+            &umem,
+        ) {
+            Ok(socket) => {
+                // Global only once its first socket exists,
+                // so a failed first bind leaves none behind.
+                umem.publish();
+
+                socket
+            }
+            Err(error) => {
+                // Freed while the fill/completion pair it
+                // saved is alive.
+                umem.free()?;
+
+                return Err(error.into());
+            }
+        }
+    };
+    // Released before the `XdpSocket` exists: its drop
+    // takes the lock, which is not reentrant.
+    drop(guard);
 
     // Sound, but the fill ring can never be topped up.
-    if config.frame_count < config.receive_depth {
-        tracing::warn!(
-            interface = interface_name,
-            frame_count = config.frame_count,
-            receive_depth = config.receive_depth,
-            "fewer frames than the receive depth; receive will drop under load"
+    let frame_count = Umem::global().frame_count();
+    if frame_count < config.receive_depth {
+        println!(
+            "warning: {interface_name}: {frame_count} frames is fewer than the receive depth {}; \
+             receive will drop under load",
+            config.receive_depth
         );
     }
 
-    create_socket(interface_name, queue_id, rx, tx, fill, completion, umem)
+    let socket = XdpSocket::new(socket, rx, tx, fill, completion);
+    // Silent and an order of magnitude slower if left
+    // undetected.
+    if !socket.config().zero_copy {
+        println!("warning: {interface_name}: driver lacks zero-copy support; running in copy mode");
+    }
+
+    Ok(socket)
 }
 
-/// Binds one queue sharing `socket`'s umem and frame
-/// pool — what makes zero-copy forwarding between them
-/// sound — at `socket`'s depths. Share before splitting
-/// `socket`. Size the umem's frame count for every
-/// sharer, e.g. with [`XdpConfig::frames_for`].
-pub fn bind_shared(
-    interface_name: impl AsRef<str>,
-    queue_id: u32,
-    socket: &XdpSocket,
-) -> Result<XdpSocket, XdpError> {
-    let config = socket.config().xdp;
-    let (fill, rx) = ring_buffer(config.receive_depth)?;
-    let (tx, completion) = ring_buffer(config.send_depth)?;
-    let umem = socket.umem().clone();
+/// Fails unless `config` repeats the existing umem's
+/// layout.
+fn check_layout(umem: &Umem, config: &XdpConfig) -> Result<(), Error> {
+    let existing = umem.config();
+    let frame_count = umem.frame_count();
+    if existing.frame_size != config.frame_size
+        || existing.frame_headroom != config.frame_headroom
+        || frame_count != config.frame_count
+    {
+        return Err(Error::UmemLayout {
+            frame_size: existing.frame_size,
+            frame_headroom: existing.frame_headroom,
+            frame_count,
+        });
+    }
 
-    create_socket(
-        interface_name.as_ref(),
-        queue_id,
-        rx,
-        tx,
-        fill,
-        completion,
-        umem,
-    )
+    Ok(())
 }
 
-/// Binds one socket over the rings and umem. `umem` is
-/// deliberately last: parameters drop in reverse, so on an
-/// error path an owning umem is deleted while its saved
-/// fill/completion pair is alive.
-fn create_socket(
+/// Creates the kernel socket over the rings and `umem`,
+/// which stay with the caller.
+fn create_xsk(
     interface_name: &str,
     queue_id: u32,
-    rx: Consumer,
-    tx: Producer,
-    fill: Producer,
-    completion: Consumer,
-    umem: Umem,
-) -> Result<XdpSocket, XdpError> {
+    rx: &Consumer,
+    tx: &Producer,
+    fill: &Producer,
+    completion: &Consumer,
+    umem: &Umem,
+) -> Result<NonNull<xsk_socket>, Error> {
     let interface = CString::new(interface_name).map_err(Error::InvalidInterfaceName)?;
     let socket_config = socket_config(rx.size(), tx.size());
 
-    // The owning socket passes the umem's saved
-    // fill/completion pair; a sharing socket passes fresh
-    // rings and binds with XDP_SHARED_UMEM.
+    // The first socket passes the umem's saved
+    // fill/completion pair; later ones pass fresh rings and
+    // bind with XDP_SHARED_UMEM.
     let mut socket = null_mut();
     let value = unsafe {
         xsk_socket__create_shared(
@@ -185,8 +225,7 @@ fn create_socket(
         return Err(Error::Initialize {
             queue_id,
             source: io::Error::from_raw_os_error(-value),
-        }
-        .into());
+        });
     }
 
     // The invariant the ring accessors rely on.
@@ -198,18 +237,8 @@ fn create_socket(
         "xsk_socket__create_shared left a ring unpopulated. This is a bug."
     );
 
-    let socket = XdpSocket::new(
-        NonNull::new(socket)
-            .expect("xsk_socket__create_shared returned a null pointer. This is a bug."),
-        rx,
-        tx,
-        fill,
-        completion,
-        umem,
-    );
-    warn_copy_mode(interface_name, &socket);
-
-    Ok(socket)
+    Ok(NonNull::new(socket)
+        .expect("xsk_socket__create_shared returned a null pointer. This is a bug."))
 }
 
 /// Zero flags: native attach and zero-copy with fallback.
@@ -246,17 +275,6 @@ fn setrlimit() -> Result<(), io::Error> {
     Ok(())
 }
 
-/// Warns when the socket fell back to copy mode — silent
-/// and an order of magnitude slower if left undetected.
-fn warn_copy_mode(interface_name: &str, socket: &XdpSocket) {
-    if !socket.config().zero_copy {
-        tracing::warn!(
-            interface = interface_name,
-            "driver lacks zero-copy support; running in copy mode"
-        );
-    }
-}
-
 /// The error type for this crate: any failure reported
 /// while setting up or driving an AF_XDP socket.
 #[derive(Debug, thiserror::Error)]
@@ -277,6 +295,15 @@ enum Error {
     InvalidInterfaceName(NulError),
     #[error("Failed to initialize the socket for queue {queue_id}: {source}")]
     Initialize { queue_id: u32, source: io::Error },
+    #[error(
+        "The umem already exists with {frame_count} frames of {frame_size} bytes and \
+         {frame_headroom} bytes of headroom; bind with that layout."
+    )]
+    UmemLayout {
+        frame_size: u32,
+        frame_headroom: u32,
+        frame_count: u32,
+    },
 }
 
 impl From<Error> for XdpError {
@@ -305,11 +332,11 @@ const _: () = {
     assert_send::<XdpSocket>();
     assert_send::<XdpSender>();
     assert_send::<XdpReceiver>();
-    assert_send::<FramePool>();
     assert_send::<Umem>();
     assert_send::<XdpDescriptor>();
 
     const fn assert_sync<T: Sync>() {}
+    assert_sync::<Umem>();
     assert_sync::<XdpDescriptor>();
 };
 

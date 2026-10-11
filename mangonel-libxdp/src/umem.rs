@@ -2,10 +2,7 @@ use std::{
     ffi::c_void,
     io,
     ptr::{NonNull, null_mut},
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::OnceLock,
 };
 
 use libc::{
@@ -15,10 +12,11 @@ use libc::{
 use mangonel_libxdp_sys::{
     xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
 };
+use mangonel_ring::Ring;
 
 use crate::{
-    pool::{CacheAligned, FramePool},
     ring::{Consumer, Producer},
+    umem::UmemError::UnmapMemory,
     xdp::DEFAULT_FRAME_SIZE,
 };
 
@@ -26,58 +24,46 @@ use crate::{
 /// cap.
 const MAX_FRAME_COUNT: u32 = 1 << 30;
 
-/// The huge page size in bytes, from /proc/meminfo. `None`
-/// when the kernel exposes no huge page support.
-fn huge_page_size() -> Option<usize> {
-    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let line = meminfo.lines().find(|l| l.starts_with("Hugepagesize:"))?;
-    let kilobytes = line.split_whitespace().nth(1)?.parse::<usize>().ok()?;
-    kilobytes.checked_mul(1024)
+/// The huge page size in bytes, from /proc/meminfo.
+fn huge_page_size() -> Result<usize, UmemError> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").map_err(UmemError::ReadMeminfo)?;
+
+    meminfo
+        .lines()
+        .find(|l| l.starts_with("Hugepagesize:"))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|kilobytes| kilobytes.parse::<usize>().ok())
+        .and_then(|kilobytes| kilobytes.checked_mul(1024))
+        .ok_or(UmemError::HugePageSize)
 }
 
-fn max_frame_size() -> u32 {
+fn max_frame_size() -> Result<u32, UmemError> {
     let value = unsafe { sysconf(_SC_PAGE_SIZE) };
-    u32::try_from(value).expect("sysconf(_SC_PAGESIZE) returned an implausible page size.")
+
+    u32::try_from(value).map_err(|_| UmemError::PageSize { value })
 }
 
-/// The sockets' handle on a umem. Clones share one kernel
-/// umem, deleted when the last clone drops.
+// Shallow: clones share one kernel umem, area and pool, and
+// nothing here frees them.
 #[derive(Clone)]
 pub(crate) struct Umem {
-    inner: Arc<UmemInner>,
-}
-
-struct UmemInner {
     umem: NonNull<xsk_umem>,
-    /// Boxed apart from the kernel umem: descriptors point
-    /// at it without a reference count, so it may have to
-    /// outlive this struct.
-    shared: NonNull<UmemShared>,
+    area: UmemArea,
+    config: xsk_umem_config,
+    pool: Ring<u64>,
 }
 
-// SAFETY: The kernel umem has no thread affinity, and
-// `UmemShared` is `Send`.
-unsafe impl Send for UmemInner {}
+// SAFETY: The kernel umem has no thread affinity, and the
+// area and pool are `Send`.
+unsafe impl Send for Umem {}
 
-// SAFETY: The rings belong to the sockets; everything else
-// is reached through `UmemShared`, which is `Sync`.
-unsafe impl Sync for UmemInner {}
+// SAFETY: The kernel umem pointer is read-only after
+// `new`, and the area and pool are `Sync`.
+unsafe impl Sync for Umem {}
 
-impl Drop for UmemInner {
-    fn drop(&mut self) {
-        let value = unsafe { xsk_umem__delete(self.umem.as_ptr()) };
-        if value.is_negative() {
-            panic!(
-                "Failed to free Umem: {}",
-                io::Error::from_raw_os_error(-value)
-            );
-        }
-
-        // SAFETY: Boxed in `Umem::new` and released only
-        // here, once, as the last socket goes.
-        unsafe { UmemShared::release(self.shared) };
-    }
-}
+/// The one umem every socket shares, set by
+/// [`Umem::publish`].
+static UMEM: OnceLock<Umem> = OnceLock::new();
 
 impl Umem {
     pub(crate) fn new(
@@ -101,7 +87,7 @@ impl Umem {
             });
         }
 
-        let max_frame_size = max_frame_size();
+        let max_frame_size = max_frame_size()?;
         if frame_size < DEFAULT_FRAME_SIZE || frame_size > max_frame_size {
             return Err(UmemError::FrameSizeOutOfRange {
                 frame_size,
@@ -114,20 +100,29 @@ impl Umem {
             .checked_mul(frame_count as usize)
             .ok_or(UmemError::AreaTooLarge)?;
 
-        // munmap — in Drop, where failure panics — rejects
-        // a MAP_HUGETLB length that is not a
-        // multiple of the huge page size, though
-        // mmap rounds it up itself.
+        // munmap rejects a MAP_HUGETLB length that is not a
+        // multiple of the huge page size, though mmap rounds
+        // it up itself.
         if use_hugetlb {
-            let huge_page_size = huge_page_size().ok_or(UmemError::HugePageSize)?;
+            let huge_page_size = huge_page_size()?;
             length = length
                 .checked_next_multiple_of(huge_page_size)
                 .ok_or(UmemError::AreaTooLarge)?;
         }
 
-        let umem_area = UmemArea::new(length, use_hugetlb)?;
+        // Every frame starts in the pool. Seeded before the
+        // area and kernel umem exist, so an error here has
+        // nothing to free.
+        let pool = Ring::new((frame_count as usize).next_power_of_two())?;
+        let mut grant = pool.bulk_write(frame_count as usize)?;
+        for frame in 0..frame_count {
+            grant.write(u64::from(frame) * u64::from(frame_size))?;
+        }
+        drop(grant);
 
-        let umem_config = xsk_umem_config {
+        let area = UmemArea::map(length, use_hugetlb)?;
+
+        let config = xsk_umem_config {
             fill_size: fill_ring.size(),
             comp_size: completion_ring.size(),
             frame_size,
@@ -139,16 +134,19 @@ impl Umem {
         let value = unsafe {
             xsk_umem__create(
                 &mut umem_ptr,
-                umem_area.address.as_ptr(),
-                u64::try_from(umem_area.length)
-                    .expect("Umem area length exceeds u64. This is a bug."),
+                area.address.as_ptr(),
+                u64::try_from(area.length).expect("Umem area length exceeds u64. This is a bug."),
                 fill_ring.as_ptr(),
                 completion_ring.as_ptr(),
-                &umem_config,
+                &config,
             )
         };
         if value.is_negative() {
-            return Err(UmemError::Initialize(io::Error::from_raw_os_error(-value)));
+            let error = io::Error::from_raw_os_error(-value);
+            // The area has no Drop; unmap it or it leaks.
+            area.unmap()?;
+
+            return Err(UmemError::Initialize(error));
         }
 
         assert!(
@@ -156,199 +154,105 @@ impl Umem {
             "xsk_umem__create left a ring unpopulated. This is a bug."
         );
 
-        // Every frame starts in the pool; the capacity
-        // rounds up to the pool's power-of-two
-        // requirement.
-        let pool = FramePool::new((frame_count as usize).next_power_of_two());
-        let (available, index) = pool
-            .claim_write(frame_count)
-            .expect("Seeding an empty pool cannot fail. This is a bug.");
-        assert!(
-            available == frame_count,
-            "Seeding claimed fewer frames than the pool was sized for. This is a bug."
-        );
-        for frame in 0..frame_count {
-            pool.write_at(
-                index.wrapping_add(frame) as usize,
-                u64::from(frame) * u64::from(frame_size),
-            );
-        }
-        pool.commit_write(index as usize, available);
-
-        let shared = Box::new(UmemShared::new(umem_area, umem_config, pool));
-        let umem = Self {
-            inner: Arc::new(UmemInner {
-                umem: NonNull::new(umem_ptr)
-                    .expect("xsk_umem__create() returned a null pointer. This is a bug."),
-                shared: NonNull::from(Box::leak(shared)),
-            }),
-        };
-
-        Ok(umem)
-    }
-
-    pub(crate) fn as_ptr(&self) -> *mut xsk_umem {
-        self.inner.umem.as_ptr()
-    }
-
-    pub(crate) fn shared(&self) -> &UmemShared {
-        // SAFETY: Released only when the last `Umem` clone
-        // drops, so it outlives `&self`.
-        unsafe { self.inner.shared.as_ref() }
-    }
-}
-
-/// Everything a descriptor reaches through its umem: the
-/// frame memory, its layout, and the pool frames recycle
-/// into.
-///
-/// Descriptors point here without a reference count, which
-/// would cost two contended atomics per packet. Instead
-/// `outstanding` counts live descriptors, moved once per
-/// batch: [`Self::lend`] as frames are minted and
-/// [`Self::reclaim`] as they leave through send or drop.
-/// When the last socket goes, [`Self::release`] frees this
-/// only if none are left; otherwise it leaks it, so a
-/// forgotten descriptor never reads unmapped memory.
-pub(crate) struct UmemShared {
-    area: UmemArea,
-    config: xsk_umem_config,
-    /// Shared by every socket on this umem.
-    pool: FramePool,
-    /// Live descriptors minted against this umem. Padded
-    /// so its writes do not evict the read-mostly fields
-    /// above from every core's cache.
-    outstanding: CacheAligned<AtomicUsize>,
-}
-
-// SAFETY: The area is process-wide memory with a stable
-// address until `release` frees it.
-unsafe impl Send for UmemShared {}
-
-// SAFETY: After creation the only mutable state is the
-// pool and the counter, which synchronize themselves.
-// Which frames a thread may touch is governed by
-// XdpDescriptor's mint rule, not by this type.
-unsafe impl Sync for UmemShared {}
-
-impl UmemShared {
-    fn new(area: UmemArea, config: xsk_umem_config, pool: FramePool) -> Self {
-        Self {
+        Ok(Self {
+            umem: NonNull::new(umem_ptr)
+                .expect("xsk_umem__create returned a null pointer. This is a bug."),
             area,
             config,
             pool,
-            outstanding: CacheAligned(AtomicUsize::new(0)),
+        })
+    }
+
+    /// Makes this the global umem. Panics if one exists.
+    pub(crate) fn publish(self) -> &'static Umem {
+        if UMEM.set(self).is_err() {
+            panic!("A second umem was published. This is a bug.");
         }
+
+        Self::global()
+    }
+
+    /// `None` before [`Self::publish`].
+    pub(crate) fn existing() -> Option<&'static Umem> {
+        UMEM.get()
+    }
+
+    /// Panics before [`Self::publish`].
+    pub(crate) fn global() -> &'static Umem {
+        UMEM.get().expect("No umem exists yet. This is a bug.")
+    }
+
+    pub(crate) fn as_ptr(&self) -> *mut xsk_umem {
+        self.umem.as_ptr()
     }
 
     pub(crate) fn config(&self) -> &xsk_umem_config {
         &self.config
     }
 
-    /// Frames the area holds; the umem is sized in whole
-    /// frames, so this is exact.
+    pub(crate) fn pool(&self) -> &Ring<u64> {
+        &self.pool
+    }
+
+    /// Frames the area holds.
     pub(crate) fn frame_count(&self) -> u32 {
         u32::try_from(self.area.length / self.config.frame_size as usize)
             .expect("The umem frame count overflows u32. This is a bug.")
     }
 
-    /// Crate-only: the claim/commit contract stays behind
-    /// the socket API.
-    pub(crate) fn pool(&self) -> &FramePool {
-        &self.pool
-    }
-
-    pub(crate) fn get_data(&self, address: u64, length: usize) -> Option<*mut c_void> {
-        let start = usize::try_from(address).ok()?;
-        if start.checked_add(length)? > self.area.length {
-            return None;
+    /// The address `length` bytes at `address` start at;
+    /// errors if they fall outside the area.
+    pub(crate) fn get_data(&self, address: u64, length: usize) -> Result<*mut c_void, UmemError> {
+        let out_of_range = || UmemError::DataOutOfRange {
+            address,
+            length,
+            area_length: self.area.length,
+        };
+        let end = usize::try_from(address)
+            .ok()
+            .and_then(|start| start.checked_add(length))
+            .ok_or_else(out_of_range)?;
+        if end > self.area.length {
+            return Err(out_of_range());
         }
 
-        Some(unsafe { xsk_umem__get_data(self.area.address.as_ptr(), address) })
+        Ok(unsafe { xsk_umem__get_data(self.area.address.as_ptr(), address) })
     }
 
-    /// Counts `count` descriptors about to be minted.
-    ///
-    /// Relaxed: only a socket mints, and a live socket
-    /// keeps [`Self::release`] from running, so nothing
-    /// reads the counter concurrently with a lend.
-    pub(crate) fn lend(&self, count: u32) {
-        self.outstanding
-            .0
-            .fetch_add(count as usize, Ordering::Relaxed);
-    }
-
-    /// Uncounts `count` descriptors that have given up
-    /// their frames. Must be the caller's last access
-    /// to `self` through those descriptors: once the
-    /// count reaches zero, `release` may free it.
-    ///
-    /// Release pairs with `release`'s Acquire, so every
-    /// access made through the descriptors happens before
-    /// the area is unmapped.
-    pub(crate) fn reclaim(&self, count: u32) {
-        let previous = self
-            .outstanding
-            .0
-            .fetch_sub(count as usize, Ordering::Release);
-        debug_assert!(
-            previous >= count as usize,
-            "Reclaimed more descriptors than were lent. This is a bug."
-        );
-    }
-
-    /// Frees the allocation if no descriptor still points
-    /// at it; otherwise leaks it with a warning. Returns
-    /// whether it was freed.
-    ///
-    /// # Safety
-    ///
-    /// `shared` must come from `Box::leak`, no socket may
-    /// remain to mint more descriptors, and this must run
-    /// at most once.
-    unsafe fn release(shared: NonNull<Self>) -> bool {
-        // SAFETY: The caller guarantees it is still live.
-        let outstanding = unsafe { shared.as_ref() }
-            .outstanding
-            .0
-            .load(Ordering::Acquire);
-        if outstanding != 0 {
-            tracing::warn!(
-                outstanding,
-                "umem dropped while descriptors still hold its frames; leaking its memory"
-            );
-
-            return false;
+    /// Deletes the kernel umem, then unmaps the area. On a
+    /// failed delete nothing is freed. libxdp's delete
+    /// fails with EBUSY while it still counts any
+    /// socket bound to the umem. So free only succeeds
+    /// after every socket on that umem has been
+    /// deleted.
+    pub(crate) fn free(self) -> Result<(), UmemError> {
+        let value = unsafe { xsk_umem__delete(self.umem.as_ptr()) };
+        if value.is_negative() {
+            return Err(UmemError::Delete(io::Error::from_raw_os_error(-value)));
         }
 
-        // SAFETY: From `Box::leak`, released once, and with
-        // nothing left pointing at it.
-        drop(unsafe { Box::from_raw(shared.as_ptr()) });
-
-        true
+        self.area.unmap()
     }
 }
 
-pub(crate) struct UmemArea {
+// Shallow: clones share one mapping, unmapped at most once.
+#[derive(Clone)]
+struct UmemArea {
     address: NonNull<c_void>,
     length: usize,
 }
 
-impl Drop for UmemArea {
-    fn drop(&mut self) {
-        let value = unsafe { munmap(self.address.as_ptr(), self.length) };
-        if value.is_negative() {
-            panic!(
-                "munmap() returned {}: {}.",
-                value,
-                io::Error::from_raw_os_error(-value)
-            );
-        }
-    }
-}
+// SAFETY: The mapping is process-wide memory with no
+// thread affinity.
+unsafe impl Send for UmemArea {}
+
+// SAFETY: `&UmemArea` only reads the address and length.
+// Which frames a thread may touch is governed by
+// XdpDescriptor's mint rule, not by this type.
+unsafe impl Sync for UmemArea {}
 
 impl UmemArea {
-    fn new(length: usize, use_hugetlb: bool) -> Result<Self, UmemError> {
+    fn map(length: usize, use_hugetlb: bool) -> Result<Self, UmemError> {
         let protection_mode = PROT_READ | PROT_WRITE;
         let mut flag = MAP_PRIVATE | MAP_ANONYMOUS;
         if use_hugetlb {
@@ -367,80 +271,59 @@ impl UmemArea {
 
         Ok(area)
     }
+
+    fn unmap(self) -> Result<(), UmemError> {
+        let value = unsafe { munmap(self.address.as_ptr(), self.length) };
+        if value.is_negative() {
+            return Err(UnmapMemory(io::Error::last_os_error()));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum UmemError {
     #[error("The frame size '{frame_size}' is not a power of two.")]
     FrameSizeNotPowerOfTwo { frame_size: u32 },
+
     #[error("The frame size '{frame_size}' is outside the supported range {min}..={max}.")]
     FrameSizeOutOfRange { frame_size: u32, min: u32, max: u32 },
+
     #[error("The frame count '{frame_count}' is outside the supported range 1..={max}.")]
     FrameCountOutOfRange { frame_count: u32, max: u32 },
+
     #[error("The umem area is too large to address.")]
     AreaTooLarge,
-    #[error("Failed to read the huge page size from /proc/meminfo.")]
+
+    #[error("Failed to read /proc/meminfo: {0}")]
+    ReadMeminfo(io::Error),
+
+    #[error("/proc/meminfo has no valid Hugepagesize entry.")]
     HugePageSize,
+
+    #[error("sysconf(_SC_PAGESIZE) returned an implausible page size '{value}'.")]
+    PageSize { value: libc::c_long },
+
     #[error("Failed to map memory: {0}")]
     MapMemory(io::Error),
+
+    #[error("Failed to unmap memory: {0}")]
+    UnmapMemory(io::Error),
+
     #[error("Failed to initialize Umem: {0}")]
     Initialize(io::Error),
-}
 
-#[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
+    #[error("Failed to delete Umem: {0}")]
+    Delete(io::Error),
 
-    /// A umem's descriptor-facing half with every frame in
-    /// its pool. Builds no kernel umem, so it needs no
-    /// privilege; release it with [`release`].
-    pub(crate) fn shared(frame_count: u32) -> NonNull<UmemShared> {
-        let frame_size = DEFAULT_FRAME_SIZE;
-        let area = UmemArea::new((frame_size * frame_count) as usize, false).unwrap();
-        let config = xsk_umem_config {
-            fill_size: 4,
-            comp_size: 4,
-            frame_size,
-            frame_headroom: 0,
-            flags: 0,
-        };
-        let pool = FramePool::new((frame_count as usize).next_power_of_two());
-        let index = pool.claim_write_all(frame_count);
-        for frame in 0..frame_count {
-            pool.write_at(
-                index.wrapping_add(frame) as usize,
-                u64::from(frame) * u64::from(frame_size),
-            );
-        }
-        pool.commit_write(index as usize, frame_count);
+    #[error("Failed to seed the frame pool: {0}")]
+    Ring(#[from] mangonel_ring::Error),
 
-        NonNull::from(Box::leak(Box::new(UmemShared::new(area, config, pool))))
-    }
-
-    pub(crate) fn release(shared: NonNull<UmemShared>) -> bool {
-        // SAFETY: From `shared` above, with no socket.
-        unsafe { UmemShared::release(shared) }
-    }
-
-    pub(crate) fn outstanding(shared: NonNull<UmemShared>) -> usize {
-        unsafe { shared.as_ref() }
-            .outstanding
-            .0
-            .load(Ordering::Relaxed)
-    }
-
-    #[test]
-    fn release_frees_only_when_nothing_is_lent() {
-        let umem = shared(4);
-        let view = unsafe { umem.as_ref() };
-        view.lend(3);
-        view.reclaim(3);
-        assert!(release(umem));
-
-        let umem = shared(4);
-        unsafe { umem.as_ref() }.lend(1);
-        // Leaked on purpose: a descriptor still points
-        // here.
-        assert!(!release(umem));
-    }
+    #[error("The {length} bytes at '{address}' fall outside the {area_length}-byte umem area.")]
+    DataOutOfRange {
+        address: u64,
+        length: usize,
+        area_length: usize,
+    },
 }

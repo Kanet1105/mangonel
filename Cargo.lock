@@ -341,8 +341,8 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "mangonel-libxdp-sys",
+ "mangonel-ring",
  "thiserror",
- "tracing",
 ]
 
 [[package]]

@@ -59,19 +59,19 @@ impl Producer {
     }
 
     /// Free slots in the ring, refreshing the cached
-    /// consumer index when fewer than `want` are cached.
-    /// May return more than `want`.
-    pub(crate) fn free(&self, want: u32) -> u32 {
-        unsafe { xsk_prod_nb_free(self.as_ptr(), want) }
+    /// consumer index when fewer than `n` are cached.
+    /// May return more than `n`.
+    pub(crate) fn free(&self, n: u32) -> u32 {
+        unsafe { xsk_prod_nb_free(self.as_ptr(), n) }
     }
 
-    /// All-or-nothing: grants `size` slots or none. Every
+    /// All-or-nothing: grants `n` slots or none. Every
     /// claim must be committed at exactly the granted
     /// count — less desyncs the ring for good. Wraps
     /// `xsk_ring_prod__reserve`.
-    pub(crate) fn claim(&self, size: u32) -> (u32, u32) {
+    pub(crate) fn claim(&self, n: u32) -> (u32, u32) {
         let mut index = 0;
-        let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), size, &mut index) };
+        let available = unsafe { xsk_ring_prod__reserve(self.as_ptr(), n, &mut index) };
 
         (available, index)
     }
@@ -105,8 +105,8 @@ impl Producer {
 
     /// Publishes the claimed slots. Wraps
     /// `xsk_ring_prod__submit`.
-    pub(crate) fn commit(&self, offset: u32) {
-        unsafe { xsk_ring_prod__submit(self.as_ptr(), offset) };
+    pub(crate) fn commit(&self, n: u32) {
+        unsafe { xsk_ring_prod__submit(self.as_ptr(), n) };
     }
 }
 
@@ -138,13 +138,13 @@ impl Consumer {
         unsafe { !(*self.as_ptr()).ring.is_null() }
     }
 
-    /// Grants up to `size` filled slots — a claim, not a
+    /// Grants up to `n` filled slots — a claim, not a
     /// look: two claims return different windows, and each
     /// must be committed at the granted count. Wraps
     /// `xsk_ring_cons__peek`.
-    pub(crate) fn claim(&self, size: u32) -> (u32, u32) {
+    pub(crate) fn claim(&self, n: u32) -> (u32, u32) {
         let mut index = 0;
-        let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), size, &mut index) };
+        let filled = unsafe { xsk_ring_cons__peek(self.as_ptr(), n, &mut index) };
 
         (filled, index)
     }
@@ -168,8 +168,8 @@ impl Consumer {
 
     /// Hands the claimed slots back to the kernel. Wraps
     /// `xsk_ring_cons__release`.
-    pub(crate) fn commit(&self, offset: u32) {
-        unsafe { xsk_ring_cons__release(self.as_ptr(), offset) };
+    pub(crate) fn commit(&self, n: u32) {
+        unsafe { xsk_ring_cons__release(self.as_ptr(), n) };
     }
 }
 
