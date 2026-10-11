@@ -205,8 +205,8 @@ impl<T> Ring<T> {
     }
 
     /// The slot at `index`. Dereference it only while the
-    /// caller's grant claims `index`, with no other reference
-    /// into the slot alive.
+    /// caller's grant claims `index`, with no other
+    /// reference into the slot alive.
     pub(crate) fn slot(&self, index: usize) -> *mut Option<T> {
         self.inner.slots[index & self.inner.mask].get()
     }
