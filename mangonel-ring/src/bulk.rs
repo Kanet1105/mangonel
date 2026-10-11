@@ -1,8 +1,8 @@
 use crate::{Error, Ring};
 
-/// Free slots claimed by [`Ring::bulk_write`]; iterating
-/// `&mut` it yields each once for writing. Dropping it
-/// publishes them all; a slot left `None` reads as a gap.
+/// Free slots claimed by [`Ring::bulk_write`], filled in
+/// order by [`write`](Self::write). Dropping it publishes
+/// them all; readers skip a slot left unwritten.
 #[must_use = "dropping the grant commits it"]
 pub struct BulkWrite<'a, T> {
     ring: &'a Ring<T>,
@@ -33,10 +33,16 @@ impl<'a, T> BulkWrite<'a, T> {
         self.start
     }
 
+    /// Slots claimed, at most the `n` asked for.
     pub fn size(&self) -> usize {
         self.size
     }
 
+    /// Writes `value` into the next free slot.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::GrantIsFull`] if every slot is written.
     pub fn write(&mut self, value: T) -> Result<(), Error> {
         if self.current == self.end {
             return Err(Error::GrantIsFull);
@@ -86,10 +92,14 @@ impl<'a, T> BulkRead<'a, T> {
         self.start
     }
 
+    /// Slots claimed, gaps included, at most the `n`
+    /// asked for.
     pub fn size(&self) -> usize {
         self.size
     }
 
+    /// Takes the next value, skipping gaps, or `None`
+    /// once every slot is read.
     pub fn read(&mut self) -> Option<T> {
         while self.current != self.end {
             let index = self.current;
