@@ -103,9 +103,11 @@ impl<T> Ring<T> {
     /// use mangonel_ring::{Error, Ring};
     ///
     /// let ring = Ring::new(4)?;
-    /// for (slot, value) in ring.bulk_write(4)?.zip([1, 2, 3, 4]) {
-    ///     *slot = Some(value);
+    /// let mut grant = ring.bulk_write(4)?;
+    /// for value in [1, 2, 3, 4] {
+    ///     grant.write(value)?;
     /// }
+    /// drop(grant);
     /// assert!(matches!(ring.bulk_write(1), Err(Error::RingIsFull)));
     /// # Ok::<(), Error>(())
     /// ```
@@ -160,12 +162,16 @@ impl<T> Ring<T> {
     /// use mangonel_ring::{Error, Ring};
     ///
     /// let ring = Ring::new(4)?;
-    /// for (slot, value) in ring.bulk_write(2)?.zip([1, 2]) {
-    ///     *slot = Some(value);
-    /// }
+    /// let mut grant = ring.bulk_write(2)?;
+    /// grant.write(1)?;
+    /// grant.write(2)?;
+    /// drop(grant);
     ///
-    /// let values: Vec<_> = ring.bulk_read(4)?.collect();
-    /// assert_eq!(values, [1, 2]);
+    /// let mut grant = ring.bulk_read(4)?;
+    /// assert_eq!(grant.read(), Some(1));
+    /// assert_eq!(grant.read(), Some(2));
+    /// assert_eq!(grant.read(), None);
+    /// drop(grant);
     /// assert!(matches!(ring.bulk_read(1), Err(Error::RingIsEmpty)));
     /// # Ok::<(), Error>(())
     /// ```
@@ -200,7 +206,10 @@ impl<T> Ring<T> {
         }
     }
 
-    pub(crate) fn slot(&self, index: usize) -> *mut Option<T> {
+    /// # Safety
+    ///
+    /// SAFETY: upheld by the caller.
+    pub(crate) unsafe fn slot(&self, index: usize) -> *mut Option<T> {
         self.inner.slots[index & self.inner.mask].get()
     }
 
@@ -223,6 +232,11 @@ impl<T> Ring<T> {
     /// reference from `read_at` into those slots may be
     /// used afterwards.
     pub(crate) fn commit_read(&self, n: usize, index: usize) {
+        for offset in 0..n {
+            let item = unsafe { &mut *self.slot(index.wrapping_add(offset)) };
+            item.take();
+        }
+
         let tail = &self.inner.consumer_tail;
         let backoff = Backoff::new();
         while tail.load(Ordering::Acquire) != index {

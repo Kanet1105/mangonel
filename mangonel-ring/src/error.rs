@@ -11,4 +11,7 @@ pub enum Error {
 
     #[error("Ring is empty.")]
     RingIsEmpty,
+
+    #[error("Grant is full.")]
+    GrantIsFull,
 }
