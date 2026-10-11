@@ -59,10 +59,10 @@ impl Producer {
     }
 
     /// Free slots in the ring, refreshing the cached
-    /// consumer index when fewer than `want` are cached.
-    /// May return more than `want`.
-    pub(crate) fn free(&self, want: u32) -> u32 {
-        unsafe { xsk_prod_nb_free(self.as_ptr(), want) }
+    /// consumer index when fewer than `n` are cached.
+    /// May return more than `n`.
+    pub(crate) fn free(&self, n: u32) -> u32 {
+        unsafe { xsk_prod_nb_free(self.as_ptr(), n) }
     }
 
     /// All-or-nothing: grants `n` slots or none. Every
