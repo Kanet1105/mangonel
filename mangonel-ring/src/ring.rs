@@ -208,15 +208,15 @@ impl<T> Ring<T> {
 
     /// # Safety
     ///
-    /// SAFETY: upheld by the caller.
+    /// The pointer may be dereferenced only while the caller's
+    /// grant claims `index`, with no other reference into the
+    /// slot alive.
     pub(crate) unsafe fn slot(&self, index: usize) -> *mut Option<T> {
         self.inner.slots[index & self.inner.mask].get()
     }
 
-    /// # Safety
-    ///
-    /// `(n, index)` must come from `claim_write`, with all
-    /// `n` slots written.
+    /// Publishes the `n` slots claimed at `index`, once
+    /// earlier claims are published.
     pub(crate) fn commit_write(&self, n: usize, index: usize) {
         let tail = &self.inner.producer_tail;
         let backoff = Backoff::new();
@@ -226,11 +226,9 @@ impl<T> Ring<T> {
         tail.store(index.wrapping_add(n), Ordering::Release);
     }
 
-    /// # Safety
-    ///
-    /// `(n, index)` must come from `claim_read`, and no
-    /// reference from `read_at` into those slots may be
-    /// used afterwards.
+    /// Frees the `n` slots claimed at `index`, dropping
+    /// any value left unread, once earlier claims are
+    /// freed.
     pub(crate) fn commit_read(&self, n: usize, index: usize) {
         for offset in 0..n {
             let item = unsafe { &mut *self.slot(index.wrapping_add(offset)) };
