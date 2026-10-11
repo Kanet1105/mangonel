@@ -80,16 +80,16 @@ impl XdpSocket {
 }
 
 /// The transmit half of one bound AF_XDP queue: drives
-/// its tx and completion rings. Not `Clone`, so those
-/// rings have one driver. Made by [`XdpSocket::split`].
+/// its tx ring. Not `Clone`, so that ring has one driver.
+/// Made by [`XdpSocket::split`].
 pub struct XdpSender {
     socket: Arc<Socket>,
 }
 
 // SAFETY: `Socket` is `Send`; sharing it with the receiver
-// is sound because this half only drives the tx and
-// completion rings, via `&mut self` on a non-`Clone` type,
-// while the receiver only drives rx and fill. Everything
+// is sound because this half only drives the tx ring, via
+// `&mut self` on a non-`Clone` type, while the receiver
+// only drives rx, fill and completion. Everything
 // else reached through the shared socket is its fd, whose
 // syscalls are thread-safe, and the global umem, which
 // synchronizes itself.
@@ -97,7 +97,10 @@ unsafe impl Send for XdpSender {}
 
 impl XdpSender {
     /// Queues the front of `buffer` for transmit; returns
-    /// how many were queued — retry with the rest.
+    /// how many were queued — retry with the rest. Sent
+    /// frames return to the pool in
+    /// [`XdpReceiver::receive`], so keep receiving on this
+    /// socket.
     #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
     pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         self.socket.send(buffer)
@@ -109,21 +112,23 @@ impl XdpSender {
 }
 
 /// The receive half of one bound AF_XDP queue: drives
-/// its rx and fill rings. Not `Clone`, so those rings
-/// have one driver. Made by [`XdpSocket::split`].
+/// its rx, fill and completion rings. Not `Clone`, so
+/// those rings have one driver. Made by
+/// [`XdpSocket::split`].
 pub struct XdpReceiver {
     socket: Arc<Socket>,
 }
 
 // SAFETY: As for `XdpSender`, with this half driving only
-// the rx and fill rings.
+// the rx, fill and completion rings.
 unsafe impl Send for XdpReceiver {}
 
 impl XdpReceiver {
     /// Fills the front of `buffer` with one minted
     /// descriptor per received frame; returns the count.
     /// Overwriting a slot whose frame was not sent leaks
-    /// it — consume slots first.
+    /// it — consume slots first. Also returns this
+    /// socket's sent frames to the pool.
     #[must_use = "the count says how many descriptors were filled with received frames"]
     pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         self.socket.receive(buffer)
@@ -259,6 +264,8 @@ impl Socket {
     /// the halves share this socket; the caller's
     /// `&mut self` is the exclusivity.
     fn receive(&self, buffer: &mut [XdpDescriptor]) -> u32 {
+        // Before fill, so frames just sent can be refilled.
+        self.complete();
         self.fill();
         self.poll();
 
@@ -305,7 +312,6 @@ impl Socket {
         }
         self.tx_ring.commit(claimed);
         self.kick();
-        self.complete();
 
         claimed
     }
