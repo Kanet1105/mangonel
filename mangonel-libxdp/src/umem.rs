@@ -275,7 +275,7 @@ impl UmemArea {
     fn unmap(self) -> Result<(), UmemError> {
         let value = unsafe { munmap(self.address.as_ptr(), self.length) };
         if value.is_negative() {
-            return Err(UnmapMemory(io::Error::from_raw_os_error(-value)));
+            return Err(UnmapMemory(io::Error::last_os_error()));
         }
 
         Ok(())
