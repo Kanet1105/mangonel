@@ -7,7 +7,6 @@
 #![warn(unreachable_pub)]
 
 mod descriptor;
-mod pool;
 mod ring;
 mod socket;
 mod umem;
@@ -17,5 +16,5 @@ pub use descriptor::XdpDescriptor;
 pub use socket::{SocketConfig, XdpReceiver, XdpSender, XdpSocket};
 pub use xdp::{
     DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, DEFAULT_RECEIVE_DEPTH, DEFAULT_SEND_DEPTH,
-    XdpConfig, XdpError, bind, bind_shared,
+    XdpConfig, XdpError, bind,
 };

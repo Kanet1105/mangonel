@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["mangonel", "mangonel-control-plane", "mangonel-data-plane", "mangonel-libxdp", "mangonel-libxdp-sys", "mangonel-nic"]
+members = [
+    "mangonel",
+    "mangonel-control-plane",
+    "mangonel-data-plane",
+    "mangonel-libxdp",
+    "mangonel-libxdp-sys",
+    "mangonel-nic",
+    "mangonel-ring",
+]
 
 # Matches libxdp, which mangonel links against. See LICENSE.
 [workspace.package]
@@ -12,15 +20,18 @@ mangonel-data-plane = { path = "mangonel-data-plane" }
 mangonel-libxdp = { path = "mangonel-libxdp" }
 mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
 mangonel-nic = { path = "mangonel-nic" }
+mangonel-ring = { path = "mangonel-ring" }
 
 # default-features = false throughout; each crate turns on the
 # features it needs.
 core_affinity = { version = "0.8", default-features = false }
+criterion = { version = "0.8", default-features = false }
+crossbeam-queue = { version = "0.3", default-features = false }
+crossbeam-utils = { version = "0.8", default-features = false }
 getrandom = { version = "0.4", default-features = false }
 left-right = { version = "0.11", default-features = false }
 libc = { version = "0.2", default-features = false }
 thiserror = { version = "2.0", default-features = false }
-tracing = { version = "0.1", default-features = false }
 
 # Numeric conversions in these crates cross kernel ABI widths (u32 ring
 # indices, u64 umem addresses, usize lengths), so every lossy or
