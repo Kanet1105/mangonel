@@ -5,6 +5,8 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
+core_affinity = { workspace = true }
+getrandom = { workspace = true }
 
 [lints]
 workspace = true
