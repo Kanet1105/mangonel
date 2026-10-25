@@ -1,7 +1,8 @@
 use std::{
     hint::spin_loop,
+    mem,
     ptr::{NonNull, null_mut},
-    sync::{Arc, PoisonError},
+    sync::PoisonError,
 };
 
 use libc::{MSG_DONTWAIT, POLLIN, SOL_XDP, getsockopt, poll, pollfd, sendto};
@@ -16,129 +17,6 @@ use crate::{
     xdp::{BIND, XdpConfig},
 };
 
-/// One bound AF_XDP queue, driven from one thread through
-/// both directions. `Send` but not `Sync`; [`Self::split`]
-/// it into an [`XdpSender`] and an [`XdpReceiver`] to drive
-/// the directions from different threads. Made by
-/// [`crate::bind`].
-pub struct XdpSocket {
-    socket: Socket,
-}
-
-impl XdpSocket {
-    /// Wraps a bound socket and its rings.
-    pub(crate) fn new(
-        socket: NonNull<xsk_socket>,
-        rx_ring: Consumer,
-        tx_ring: Producer,
-        fill_ring: Producer,
-        completion_ring: Consumer,
-    ) -> Self {
-        Self {
-            socket: Socket {
-                socket,
-                rx_ring,
-                tx_ring,
-                fill_ring,
-                completion_ring,
-            },
-        }
-    }
-
-    /// Splits into the transmit and receive halves, which
-    /// may run on different threads. The socket stays bound
-    /// until both halves drop.
-    // Shared only between the halves, whose `Send` impls
-    // carry the justification `Sync` would otherwise give.
-    #[expect(clippy::arc_with_non_send_sync)]
-    pub fn split(self) -> (XdpSender, XdpReceiver) {
-        let socket = Arc::new(self.socket);
-
-        (
-            XdpSender {
-                socket: socket.clone(),
-            },
-            XdpReceiver { socket },
-        )
-    }
-
-    /// As [`XdpSender::send`].
-    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
-    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
-        self.socket.send(buffer)
-    }
-
-    /// As [`XdpReceiver::receive`].
-    #[must_use = "the count says how many descriptors were filled with received frames"]
-    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
-        self.socket.receive(buffer)
-    }
-
-    pub fn config(&self) -> SocketConfig {
-        self.socket.config()
-    }
-}
-
-/// The transmit half of one bound AF_XDP queue: drives
-/// its tx ring. Not `Clone`, so that ring has one driver.
-/// Made by [`XdpSocket::split`].
-pub struct XdpSender {
-    socket: Arc<Socket>,
-}
-
-// SAFETY: `Socket` is `Send`; sharing it with the receiver
-// is sound because this half only drives the tx ring, via
-// `&mut self` on a non-`Clone` type, while the receiver
-// only drives rx, fill and completion. Everything
-// else reached through the shared socket is its fd, whose
-// syscalls are thread-safe, and the global umem, which
-// synchronizes itself.
-unsafe impl Send for XdpSender {}
-
-impl XdpSender {
-    /// Queues the front of `buffer` for transmit; returns
-    /// how many were queued — retry with the rest. Sent
-    /// frames return to the pool in
-    /// [`XdpReceiver::receive`], so keep receiving on this
-    /// socket.
-    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
-    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
-        self.socket.send(buffer)
-    }
-
-    pub fn config(&self) -> SocketConfig {
-        self.socket.config()
-    }
-}
-
-/// The receive half of one bound AF_XDP queue: drives
-/// its rx, fill and completion rings. Not `Clone`, so
-/// those rings have one driver. Made by
-/// [`XdpSocket::split`].
-pub struct XdpReceiver {
-    socket: Arc<Socket>,
-}
-
-// SAFETY: As for `XdpSender`, with this half driving only
-// the rx, fill and completion rings.
-unsafe impl Send for XdpReceiver {}
-
-impl XdpReceiver {
-    /// Fills the front of `buffer` with one minted
-    /// descriptor per received frame; returns the count.
-    /// Overwriting a slot whose frame was not sent leaks
-    /// it — consume slots first. Also returns this
-    /// socket's sent frames to the pool.
-    #[must_use = "the count says how many descriptors were filled with received frames"]
-    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
-        self.socket.receive(buffer)
-    }
-
-    pub fn config(&self) -> SocketConfig {
-        self.socket.config()
-    }
-}
-
 /// What a bound socket was given: the depths and umem
 /// layout it runs with, and the bind mode the kernel
 /// granted. Fixed for the socket's lifetime.
@@ -152,14 +30,11 @@ pub struct SocketConfig {
 
 /// One bound AF_XDP queue: receive and transmit over its
 /// four rings, recycling frames through the umem's shared
-/// frame pool. Private: it is
-/// only ever driven through [`XdpSocket`] or the
-/// [`XdpSender`] and [`XdpReceiver`] halves that share it,
-/// whose `&mut self` methods are what give each ring a
-/// single driver. Deleted when its last owner drops, with
-/// every ring alive: libxdp dereferences all four while
-/// deleting.
-struct Socket {
+/// frame pool. Its `&mut self` methods give each ring a
+/// single driver. Made by [`crate::bind`]; deleted on drop
+/// with every ring alive: libxdp dereferences all four
+/// while deleting.
+pub struct XdpSocket {
     socket: NonNull<xsk_socket>,
     rx_ring: Consumer,
     tx_ring: Producer,
@@ -169,12 +44,11 @@ struct Socket {
 
 // SAFETY: The socket pointer and rings have no thread
 // affinity, so the socket may move between threads. It is
-// deliberately not `Sync`: its `&self` methods drive the
-// rings unsynchronized, so only the halves, which each
-// drive disjoint rings, may share it across threads.
-unsafe impl Send for Socket {}
+// deliberately not `Sync`: its private `&self` methods
+// drive the rings unsynchronized.
+unsafe impl Send for XdpSocket {}
 
-impl Drop for Socket {
+impl Drop for XdpSocket {
     fn drop(&mut self) {
         let _bind = BIND.lock().unwrap_or_else(PoisonError::into_inner);
         // Runs before the fields drop, so the delete sees
@@ -183,10 +57,27 @@ impl Drop for Socket {
     }
 }
 
-impl Socket {
+impl XdpSocket {
+    /// Wraps a bound socket and its rings.
+    pub(crate) fn new(
+        socket: NonNull<xsk_socket>,
+        rx_ring: Consumer,
+        tx_ring: Producer,
+        fill_ring: Producer,
+        completion_ring: Consumer,
+    ) -> Self {
+        Self {
+            socket,
+            rx_ring,
+            tx_ring,
+            fill_ring,
+            completion_ring,
+        }
+    }
+
     /// Zero-copy is asked of the kernel each call; a failed
     /// getsockopt counts as no.
-    fn config(&self) -> SocketConfig {
+    pub fn config(&self) -> SocketConfig {
         let umem = Umem::global();
         let config = umem.config();
 
@@ -260,10 +151,13 @@ impl Socket {
         self.fill_ring.commit(claimed);
     }
 
-    /// Backs [`XdpReceiver::receive`]. `&self` only because
-    /// the halves share this socket; the caller's
-    /// `&mut self` is the exclusivity.
-    fn receive(&self, buffer: &mut [XdpDescriptor]) -> u32 {
+    /// Fills the front of `buffer` with one minted
+    /// descriptor per received frame; returns the count.
+    /// Overwriting a slot that still holds a frame leaks
+    /// it — send or drop slots first. Also returns this
+    /// socket's sent frames to the pool.
+    #[must_use = "the count says how many descriptors were filled with received frames"]
+    pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         // Before fill, so frames just sent can be refilled.
         self.complete();
         self.fill();
@@ -293,27 +187,84 @@ impl Socket {
         claimed
     }
 
-    /// Backs [`XdpSender::send`]; `&self` as
-    /// [`Self::receive`].
-    fn send(&self, buffer: &mut [XdpDescriptor]) -> u32 {
+    /// Queues the front of `buffer` for transmit, emptying
+    /// the slots it sends and skipping empty ones; returns
+    /// how many slots it took — retry with the rest. Sent
+    /// frames return to the pool in [`Self::receive`], so
+    /// keep receiving on this socket.
+    #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
+    pub fn send(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
         let want = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
         // Clamp to the ring's free space: an unclamped
         // all-or-nothing claim makes no progress until the
         // ring can seat the whole batch.
         let free = self.tx_ring.free(want).min(want);
-        let (claimed, tx_index) = self.tx_ring.claim(free);
-        for offset in 0..claimed {
-            let descriptor = &buffer[offset as usize];
+        // Empty slots need no ring slot, so the front taken
+        // runs past them.
+        let (mut taken, mut sends) = (0, 0);
+        for descriptor in &buffer[..want as usize] {
+            if !descriptor.is_empty() {
+                if sends == free {
+                    break;
+                }
+                sends += 1;
+            }
+            taken += 1;
+        }
+
+        // The kernel only consumes tx entries, so the free
+        // space checked above cannot shrink.
+        let (claimed, index) = self.tx_ring.claim(sends);
+        assert!(
+            claimed == sends,
+            "Tx ring free space shrank below a checked burst. This is a bug."
+        );
+        let mut offset = 0;
+        for descriptor in &mut buffer[..taken as usize] {
+            if descriptor.is_empty() {
+                continue;
+            }
+
+            let descriptor = mem::take(descriptor);
             self.tx_ring.write_descriptor(
-                tx_index.wrapping_add(offset),
+                index.wrapping_add(offset),
                 descriptor.address(),
                 descriptor.length(),
             );
+            offset += 1;
         }
         self.tx_ring.commit(claimed);
         self.kick();
 
-        claimed
+        taken
+    }
+
+    /// Returns `buffer`'s frames to the umem's pool instead
+    /// of sending them, emptying their slots.
+    pub fn drop(&mut self, buffer: &mut [XdpDescriptor]) {
+        let pool = Umem::global().pool();
+        let mut remaining = buffer
+            .iter()
+            .filter(|descriptor| !descriptor.is_empty())
+            .count();
+        let mut frames = buffer
+            .iter_mut()
+            .filter(|descriptor| !descriptor.is_empty());
+        while remaining > 0 {
+            // As in `complete`: a failed or short claim only
+            // waits on a reader yet to commit.
+            let Ok(mut grant) = pool.bulk_write(remaining) else {
+                spin_loop();
+                continue;
+            };
+
+            for descriptor in frames.by_ref().take(grant.size()) {
+                grant
+                    .write(mem::take(descriptor).address())
+                    .expect("Wrote past the grant. This is a bug.");
+            }
+            remaining -= grant.size();
+        }
     }
 
     /// Returns every completed tx frame to the umem's pool.

@@ -14,7 +14,7 @@ use mangonel_libxdp_sys::{
 use crate::{
     descriptor::XdpDescriptor,
     ring::{Consumer, Producer, RingError, ring_buffer},
-    socket::{XdpReceiver, XdpSender, XdpSocket},
+    socket::XdpSocket,
     umem::{Umem, UmemError},
 };
 
@@ -88,10 +88,8 @@ pub(crate) static BIND: Mutex<()> = Mutex::new(());
 /// Binds one queue on the global umem, which the first
 /// call creates laid out by `config`; later calls must
 /// repeat that layout. Every socket shares the umem, so
-/// frames forward between them without copying.
-/// [`XdpSocket::split`] it to drive send and receive from
-/// different threads. Panics on broken libxdp/kernel
-/// contracts.
+/// frames forward between them without copying. Panics
+/// on broken libxdp/kernel contracts.
 pub fn bind(
     interface_name: impl AsRef<str>,
     queue_id: u32,
@@ -330,8 +328,6 @@ impl From<UmemError> for XdpError {
 const _: () = {
     const fn assert_send<T: Send>() {}
     assert_send::<XdpSocket>();
-    assert_send::<XdpSender>();
-    assert_send::<XdpReceiver>();
     assert_send::<Umem>();
     assert_send::<XdpDescriptor>();
 
