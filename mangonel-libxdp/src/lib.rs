@@ -13,7 +13,7 @@ mod umem;
 mod xdp;
 
 pub use descriptor::XdpDescriptor;
-pub use socket::{SocketConfig, XdpReceiver, XdpSender, XdpSocket};
+pub use socket::{SocketConfig, XdpSocket};
 pub use xdp::{
     DEFAULT_FRAME_HEADROOM, DEFAULT_FRAME_SIZE, DEFAULT_RECEIVE_DEPTH, DEFAULT_SEND_DEPTH,
     XdpConfig, XdpError, bind,
