@@ -3,9 +3,9 @@
 //!
 //! The configuration lives in a [`left_right`] structure
 //! whose single writer is a dedicated thread. Spawn it with
-//! [`ControlPlane::spawn`], submit changes through a
-//! [`ControlHandle`], and read the published [`State`]
-//! through a [`Reader`].
+//! [`ControlPlane::spawn`], submit changes through its
+//! methods, and read the published [`State`] through a
+//! [`Reader`].
 //!
 //! The state holds WAN and LAN ports ([`WanPort`],
 //! [`LanPort`]), extended access lists ([`acl`]), and which
@@ -22,6 +22,6 @@ pub use acl::{Acl, AclEntry};
 pub use addr::{Cidr, IpFamily, MacAddr};
 pub use error::ConfigError;
 pub use left_right::ReadGuard;
-pub use plane::{ControlHandle, ControlPlane, Error, Reader};
+pub use plane::{ControlPlane, Error, Reader};
 pub use port::{Addressing, Direction, Dns, LanIp, LanPort, PortAcls, Role, WanIp, WanPort};
 pub use state::State;

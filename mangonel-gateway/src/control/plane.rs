@@ -3,11 +3,11 @@
 //!
 //! One dedicated thread owns the left-right
 //! [`WriteHandle`]. Users never touch it: they send
-//! requests down a queue through a [`ControlHandle`], and
-//! the thread validates, applies and publishes each one in
-//! order. Readers — typically data-plane threads — hold a
-//! [`Reader`] and see the last published [`State`] without
-//! taking a lock.
+//! requests down a queue through [`ControlPlane`]'s
+//! methods, and the thread validates, applies and publishes
+//! each one in order. Readers — typically data-plane
+//! threads — hold a [`Reader`] and see the last published
+//! [`State`] without taking a lock.
 
 use std::{
     io,
@@ -22,12 +22,17 @@ use crate::control::{
     Acl, AclEntry, ConfigError, Direction, LanPort, MacAddr, State, WanPort, state::Op,
 };
 
-/// Owner of the control-plane thread.
+/// Owner of the control-plane thread, and the way to change
+/// its state. Share it by reference or `Arc` to submit
+/// changes from several threads.
+///
+/// Each change blocks until the thread has handled it. On
+/// `Ok`, the change is already published: every
+/// [`Reader::enter`] from then on sees it.
 ///
 /// Dropping it stops the thread after the requests already
 /// queued are handled, and waits for it to exit. From then
-/// on [`ControlHandle`] calls return [`Error::Stopped`] and
-/// [`Reader::enter`] returns `None`.
+/// on [`Reader::enter`] returns `None`.
 pub struct ControlPlane {
     requests: Sender<Request>,
     readers: ReadHandleFactory<State>,
@@ -63,30 +68,11 @@ impl ControlPlane {
         })
     }
 
-    /// A handle for submitting changes. Clone it freely.
-    pub fn handle(&self) -> ControlHandle {
-        ControlHandle {
-            requests: self.requests.clone(),
-        }
-    }
-
     /// A reader for one thread.
     pub fn reader(&self) -> Reader {
         Reader(self.readers.handle())
     }
-}
 
-/// Submits changes to the control plane.
-///
-/// Each call blocks until the thread has handled the
-/// request. On `Ok`, the change is already published: every
-/// [`Reader::enter`] from then on sees it.
-#[derive(Clone)]
-pub struct ControlHandle {
-    requests: Sender<Request>,
-}
-
-impl ControlHandle {
     /// Adds a WAN port, or replaces the one with the same
     /// MAC.
     pub fn set_wan(&self, port: WanPort) -> Result<(), Error> {
@@ -217,13 +203,12 @@ mod tests {
     #[test]
     fn changes_are_visible_once_acknowledged() {
         let plane = ControlPlane::spawn().unwrap();
-        let handle = plane.handle();
         let reader = plane.reader();
 
-        handle
+        plane
             .set_wan(wan_static(WAN_MAC, "203.0.113.2", "203.0.113.1"))
             .unwrap();
-        handle
+        plane
             .set_lan(lan(LAN_MAC, "192.168.1.1", "fd00:1::1"))
             .unwrap();
         {
@@ -232,17 +217,16 @@ mod tests {
             assert_eq!(state.lan_ports().len(), 1);
         }
 
-        handle.remove_wan(WAN_MAC).unwrap();
+        plane.remove_wan(WAN_MAC).unwrap();
         assert!(reader.enter().unwrap().wan(WAN_MAC).is_none());
     }
 
     #[test]
     fn rejected_changes_leave_state_untouched() {
         let plane = ControlPlane::spawn().unwrap();
-        let handle = plane.handle();
 
         assert_eq!(
-            handle.remove_lan(LAN_MAC),
+            plane.remove_lan(LAN_MAC),
             Err(Error::Config(ConfigError::NotFound(
                 LAN_MAC,
                 crate::control::Role::Lan
@@ -255,7 +239,6 @@ mod tests {
     fn readers_work_from_other_threads() {
         let plane = ControlPlane::spawn().unwrap();
         plane
-            .handle()
             .set_lan(lan(LAN_MAC, "192.168.1.1", "fd00:1::1"))
             .unwrap();
 
@@ -267,30 +250,27 @@ mod tests {
     }
 
     #[test]
-    fn handles_fail_after_shutdown() {
+    fn readers_see_nothing_after_shutdown() {
         let plane = ControlPlane::spawn().unwrap();
-        let handle = plane.handle();
         let reader = plane.reader();
         drop(plane);
 
-        assert_eq!(handle.remove_wan(WAN_MAC), Err(Error::Stopped));
         assert!(reader.enter().is_none());
     }
 
     #[test]
     fn acl_crud() {
         let plane = ControlPlane::spawn().unwrap();
-        let handle = plane.handle();
         let reader = plane.reader();
 
-        handle.set_acl(Acl::new("lan-in")).unwrap();
-        handle.set_acl_entry("lan-in", permit_web(10)).unwrap();
+        plane.set_acl(Acl::new("lan-in")).unwrap();
+        plane.set_acl_entry("lan-in", permit_web(10)).unwrap();
         assert_eq!(
             reader.enter().unwrap().acl("lan-in").unwrap().entry(10),
             Some(&permit_web(10))
         );
 
-        handle.remove_acl_entry("lan-in", 10).unwrap();
+        plane.remove_acl_entry("lan-in", 10).unwrap();
         assert!(
             reader
                 .enter()
@@ -301,9 +281,9 @@ mod tests {
                 .is_empty()
         );
 
-        handle.remove_acl("lan-in").unwrap();
+        plane.remove_acl("lan-in").unwrap();
         assert_eq!(
-            handle.set_acl_entry("lan-in", permit_web(10)),
+            plane.set_acl_entry("lan-in", permit_web(10)),
             Err(Error::Config(ConfigError::AclNotFound("lan-in".to_owned())))
         );
     }
@@ -311,14 +291,13 @@ mod tests {
     #[test]
     fn attach_and_detach() {
         let plane = ControlPlane::spawn().unwrap();
-        let handle = plane.handle();
         let reader = plane.reader();
 
-        handle.set_acl(Acl::new("lan-in")).unwrap();
-        handle
+        plane.set_acl(Acl::new("lan-in")).unwrap();
+        plane
             .set_lan(lan(LAN_MAC, "192.168.1.1", "fd00:1::1"))
             .unwrap();
-        handle
+        plane
             .attach_acl(LAN_MAC, Direction::Inbound, "lan-in")
             .unwrap();
         assert!(
@@ -329,14 +308,14 @@ mod tests {
                 .is_some()
         );
         assert_eq!(
-            handle.remove_acl("lan-in"),
+            plane.remove_acl("lan-in"),
             Err(Error::Config(ConfigError::AclInUse(
                 "lan-in".to_owned(),
                 LAN_MAC
             )))
         );
 
-        handle.detach_acl(LAN_MAC, Direction::Inbound).unwrap();
-        handle.remove_acl("lan-in").unwrap();
+        plane.detach_acl(LAN_MAC, Direction::Inbound).unwrap();
+        plane.remove_acl("lan-in").unwrap();
     }
 }

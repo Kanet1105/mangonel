@@ -352,6 +352,7 @@ dependencies = [
  "left-right",
  "mangonel-libxdp",
  "mangonel-nic",
+ "mangonel-ring",
  "thiserror",
 ]
 

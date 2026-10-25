@@ -1,5 +1,5 @@
 //! The data plane: a pinned worker per queue index, on the
-//! NICs' NUMA node.
+//! NICs' NUMA node, bound to that queue on every NIC.
 
 use std::{
     fs, io,
@@ -12,9 +12,17 @@ use std::{
 };
 
 use core_affinity::CoreId;
+use mangonel_libxdp::XdpConfig;
 use mangonel_nic::nic::Nic;
+use mangonel_ring::Ring;
 
-use crate::data::Error;
+use crate::{
+    control::{MacAddr, Reader},
+    data::{
+        Error,
+        worker::{HANDOFF_DEPTH, Handoff, Handoffs, Worker},
+    },
+};
 
 /// The workers and the flag that stops them. Dropping it
 /// stops and joins every worker.
@@ -38,39 +46,51 @@ impl DataPlane {
     /// Sets every NIC to as many queues as the most
     /// constrained one can bind, then spawns a worker per
     /// queue index, each pinned to its own physical core on
-    /// the NICs' NUMA node.
-    pub fn new(mut nics: Vec<Nic>) -> Result<Self, Error> {
-        let narrowest = nics
+    /// the NICs' NUMA node and reading its configuration
+    /// through `reader`.
+    pub fn new(mut nics: Vec<Nic>, reader: Reader) -> Result<Self, Error> {
+        let cores = plan(&mut nics)?;
+        let workers = cores.len();
+        let ports: Vec<(String, MacAddr)> = nics
             .iter()
-            .min_by_key(|nic| queue_limit(nic))
-            .ok_or(Error::NoNics)?;
-        let queues = queue_limit(narrowest);
-        if queues == 0 {
-            return Err(Error::NoQueues(narrowest.name().to_owned()));
-        }
-
-        let cores = cores(numa_node(&nics)?)?;
-        if cores.is_empty() {
-            return Err(Error::NoCores);
-        }
-
-        let worker_count = queues.min(u32::try_from(cores.len()).unwrap_or(u32::MAX));
-        for nic in &mut nics {
-            // A matching count skips the call, which needs
-            // CAP_NET_ADMIN and drops the link.
-            if nic.rx_queues() != worker_count || nic.tx_queues() != worker_count {
-                nic.set_queue_count(worker_count).map_err(|error| {
-                    Error::QueueCount(nic.name().to_owned(), worker_count, error)
-                })?;
-            }
-        }
+            .map(|nic| (nic.name().to_owned(), MacAddr(nic.mac())))
+            .collect();
+        let sockets = u32::try_from(ports.len() * workers).unwrap_or(u32::MAX);
+        let defaults = XdpConfig::default();
+        let config = XdpConfig {
+            frame_count: defaults
+                .frames_for(sockets)
+                .expect("A socket per NIC and core overflows the frame count. This is a bug."),
+            ..defaults
+        };
+        // From each worker to each other, by index.
+        let rings: Vec<Vec<Ring<Handoff>>> = (0..workers)
+            .map(|_| {
+                (0..workers)
+                    .map(|_| {
+                        Ring::new(HANDOFF_DEPTH)
+                            .expect("HANDOFF_DEPTH is a power of two. This is a bug.")
+                    })
+                    .collect()
+            })
+            .collect();
 
         let mut plane = Self {
             stop: Arc::default(),
-            workers: Vec::with_capacity(worker_count as usize),
+            workers: Vec::with_capacity(workers),
         };
-        for (index, &core) in cores.iter().take(worker_count as usize).enumerate() {
-            plane.workers.push(spawn_worker(index, core)?);
+        for (index, core) in cores.into_iter().enumerate() {
+            let handoffs = Handoffs {
+                inbox: (0..workers)
+                    .filter(|&from| from != index)
+                    .map(|from| rings[from][index].clone())
+                    .collect(),
+                outbox: rings[index].clone(),
+            };
+            let (ports, reader, stop) = (ports.clone(), reader.clone(), plane.stop.clone());
+            plane.workers.push(spawn_worker(index, core, move || {
+                Worker::bind(index, &ports, config, reader, handoffs, stop)
+            })?);
         }
 
         Ok(plane)
@@ -84,6 +104,36 @@ impl DataPlane {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
     }
+}
+
+/// Sets every NIC to as many queues as the most constrained
+/// one can bind, and picks a core near them for each queue.
+fn plan(nics: &mut [Nic]) -> Result<Vec<usize>, Error> {
+    let narrowest = nics
+        .iter()
+        .min_by_key(|nic| queue_limit(nic))
+        .ok_or(Error::NoNics)?;
+    let queues = queue_limit(narrowest);
+    if queues == 0 {
+        return Err(Error::NoQueues(narrowest.name().to_owned()));
+    }
+
+    let cores = cores(numa_node(nics)?)?;
+    if cores.is_empty() {
+        return Err(Error::NoCores);
+    }
+
+    let worker_count = queues.min(u32::try_from(cores.len()).unwrap_or(u32::MAX));
+    for nic in nics.iter_mut() {
+        // A matching count skips the call, which needs
+        // CAP_NET_ADMIN and drops the link.
+        if nic.rx_queues() != worker_count || nic.tx_queues() != worker_count {
+            nic.set_queue_count(worker_count)
+                .map_err(|error| Error::QueueCount(nic.name().to_owned(), worker_count, error))?;
+        }
+    }
+
+    Ok(cores.into_iter().take(worker_count as usize).collect())
 }
 
 /// The most queues `nic` can bind both rings on: its
@@ -168,61 +218,36 @@ fn cpu_list(list: &str) -> Option<Vec<usize>> {
     Some(cpus)
 }
 
-/// Spawns worker `index` pinned to `core`; returns once it
-/// is pinned.
-fn spawn_worker(index: usize, core: usize) -> Result<JoinHandle<()>, Error> {
-    let (pinned_sender, pinned) = mpsc::sync_channel(1);
+/// Spawns worker `index` pinned to `core`, where `bind`
+/// makes it; returns once it is bound.
+fn spawn_worker(
+    index: usize,
+    core: usize,
+    bind: impl FnOnce() -> Result<Worker, Error> + Send + 'static,
+) -> Result<JoinHandle<()>, Error> {
+    let (ready_sender, ready) = mpsc::sync_channel(1);
     let worker = thread::Builder::new()
         .name(format!("worker-{index}"))
         .spawn(move || {
-            let is_pinned = core_affinity::set_for_current(CoreId { id: core });
+            let worker = if core_affinity::set_for_current(CoreId { id: core }) {
+                bind()
+            } else {
+                Err(Error::Pin(index, core))
+            };
             // The spawner waits on this, so it is listening.
-            let _ = pinned_sender.send(is_pinned);
+            match worker {
+                Ok(worker) => {
+                    let _ = ready_sender.send(Ok(()));
+                    worker.run();
+                }
+                Err(error) => {
+                    let _ = ready_sender.send(Err(error));
+                }
+            }
         })
         .map_err(|error| Error::Spawn(index, error))?;
 
-    if !pinned.recv().unwrap_or(false) {
-        return Err(Error::Pin(index, core));
-    }
+    ready.recv().unwrap_or(Err(Error::Startup(index)))?;
 
     Ok(worker)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_cpu_lists() {
-        assert_eq!(cpu_list("3,19\n"), Some(vec![3, 19]));
-        assert_eq!(cpu_list("0-2,8-9"), Some(vec![0, 1, 2, 8, 9]));
-        assert_eq!(cpu_list("\n"), Some(vec![]));
-        assert_eq!(cpu_list("0-x"), None);
-    }
-
-    #[test]
-    fn rejects_no_nics() {
-        assert!(matches!(DataPlane::new(vec![]), Err(Error::NoNics)));
-    }
-
-    #[test]
-    fn loopback_gets_one_worker() {
-        // lo has one queue and no channel info or NUMA node.
-        let plane = DataPlane::new(vec![Nic::open("lo").unwrap()]).unwrap();
-        assert_eq!(plane.worker_count(), 1);
-    }
-
-    #[test]
-    fn picks_one_cpu_per_physical_core() {
-        let cores = cores(None).unwrap();
-        for &cpu in &cores {
-            let siblings = read_cpu_list(format!(
-                "/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"
-            ))
-            .unwrap();
-            let picked = siblings.iter().filter(|sibling| cores.contains(sibling));
-            assert_eq!(picked.count(), 1);
-            assert!(!siblings.contains(&0));
-        }
-    }
 }

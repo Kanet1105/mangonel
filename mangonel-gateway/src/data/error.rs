@@ -1,5 +1,6 @@
 use std::io;
 
+use mangonel_libxdp::XdpError;
 use mangonel_nic::nic;
 
 /// Why the data plane could not start.
@@ -28,4 +29,10 @@ pub enum Error {
 
     #[error("Failed to pin worker {0} to core {1}")]
     Pin(usize, usize),
+
+    #[error("Failed to bind {0} queue {1}: {2}")]
+    Bind(String, u32, XdpError),
+
+    #[error("Worker {0} exited during startup")]
+    Startup(usize),
 }
