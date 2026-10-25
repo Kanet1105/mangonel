@@ -212,6 +212,28 @@ impl XdpSocket {
         claimed
     }
 
+    /// Returns `buffer`'s frames to the umem's pool instead
+    /// of sending them.
+    pub fn drop(&mut self, buffer: &[XdpDescriptor]) {
+        let pool = Umem::global().pool();
+        let mut offset = 0;
+        while offset < buffer.len() {
+            // As in `complete`: a failed or short claim only
+            // waits on a reader yet to commit.
+            let Ok(mut grant) = pool.bulk_write(buffer.len() - offset) else {
+                spin_loop();
+                continue;
+            };
+
+            for _ in 0..grant.size() {
+                grant
+                    .write(buffer[offset].address())
+                    .expect("Wrote past the grant. This is a bug.");
+                offset += 1;
+            }
+        }
+    }
+
     /// Returns every completed tx frame to the umem's pool.
     fn complete(&self) {
         let (claimed, index) = self.completion_ring.claim(self.completion_ring.size());
