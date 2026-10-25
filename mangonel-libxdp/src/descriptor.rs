@@ -1,11 +1,15 @@
 use crate::umem::Umem;
 
-/// A received frame's handle. Not `Clone` and minted only
-/// by `XdpReceiver::receive`, so a descriptor is its
-/// frame's sole handle — what makes
-/// [`Self::as_slice_mut`] sound. A descriptor that merely
-/// goes out of scope leaks its frame.
-#[derive(Debug, Default)]
+/// The address of a descriptor holding no frame; no frame
+/// lies there.
+const EMPTY: u64 = u64::MAX;
+
+/// A received frame's handle, or empty. Not `Clone`,
+/// minted only by `XdpSocket::receive` and emptied by
+/// `send` and `drop`, so a descriptor is its frame's sole
+/// handle — what makes [`Self::as_slice_mut`] sound. One
+/// that goes out of scope holding a frame leaks it.
+#[derive(Debug)]
 pub struct XdpDescriptor {
     /// Offset of the frame within the umem area.
     address: u64,
@@ -13,9 +17,24 @@ pub struct XdpDescriptor {
     length: u32,
 }
 
+/// Empty: holds no frame, so `send` and `drop` skip it.
+impl Default for XdpDescriptor {
+    fn default() -> Self {
+        Self {
+            address: EMPTY,
+            length: 0,
+        }
+    }
+}
+
 impl XdpDescriptor {
     pub(crate) fn new(address: u64, length: u32) -> Self {
         Self { address, length }
+    }
+
+    /// Whether the descriptor holds no frame.
+    pub fn is_empty(&self) -> bool {
+        self.address == EMPTY
     }
 
     /// Offset of the frame within the umem area.
@@ -30,8 +49,12 @@ impl XdpDescriptor {
     }
 
     /// A shared view of the buffer: headroom, then the
-    /// frame.
+    /// frame. Panics if empty.
     pub fn as_slice(&self) -> &[u8] {
+        assert!(
+            !self.is_empty(),
+            "XdpDescriptor is empty: its frame was sent or dropped."
+        );
         let umem = Umem::global();
         let headroom_size = umem.config().frame_headroom;
         let length = self.length as usize + headroom_size as usize;
@@ -45,8 +68,9 @@ impl XdpDescriptor {
             .cast::<u8>();
 
         // SAFETY: A descriptor owns its frame — on no ring,
-        // kernel off it; send needs `&mut self` and is
-        // excluded while the borrow lives.
+        // kernel off it; send and drop take it out of its
+        // slot through `&mut`, excluded while the borrow
+        // lives.
         // get_data bounds the range; the global umem
         // stays mapped.
         unsafe { std::slice::from_raw_parts(offset, length) }
@@ -54,6 +78,10 @@ impl XdpDescriptor {
 
     /// Exclusive [`Self::as_slice`].
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
+        assert!(
+            !self.is_empty(),
+            "XdpDescriptor is empty: its frame was sent or dropped."
+        );
         let umem = Umem::global();
         let headroom_size = umem.config().frame_headroom;
         let length = self.length as usize + headroom_size as usize;
@@ -85,5 +113,22 @@ impl XdpDescriptor {
         let headroom = Umem::global().config().frame_headroom as usize;
 
         &mut self.as_slice_mut()[headroom..]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_empty() {
+        assert!(XdpDescriptor::default().is_empty());
+        assert!(!XdpDescriptor::new(0, 64).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "XdpDescriptor is empty")]
+    fn empty_has_no_slice() {
+        let _ = XdpDescriptor::default().as_slice();
     }
 }
