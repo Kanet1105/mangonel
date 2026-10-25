@@ -1,5 +1,6 @@
 use std::{
     hint::spin_loop,
+    mem,
     ptr::{NonNull, null_mut},
     sync::PoisonError,
 };
@@ -152,8 +153,8 @@ impl XdpSocket {
 
     /// Fills the front of `buffer` with one minted
     /// descriptor per received frame; returns the count.
-    /// Overwriting a slot whose frame was not sent leaks
-    /// it — consume slots first. Also returns this
+    /// Overwriting a slot that still holds a frame leaks
+    /// it — send or drop slots first. Also returns this
     /// socket's sent frames to the pool.
     #[must_use = "the count says how many descriptors were filled with received frames"]
     pub fn receive(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
@@ -186,8 +187,9 @@ impl XdpSocket {
         claimed
     }
 
-    /// Queues the front of `buffer` for transmit; returns
-    /// how many were queued — retry with the rest. Sent
+    /// Queues the front of `buffer` for transmit, emptying
+    /// the slots it sends and skipping empty ones; returns
+    /// how many slots it took — retry with the rest. Sent
     /// frames return to the pool in [`Self::receive`], so
     /// keep receiving on this socket.
     #[must_use = "fewer descriptors than passed may have been consumed; the count says how many"]
@@ -197,40 +199,71 @@ impl XdpSocket {
         // all-or-nothing claim makes no progress until the
         // ring can seat the whole batch.
         let free = self.tx_ring.free(want).min(want);
-        let (claimed, tx_index) = self.tx_ring.claim(free);
-        for offset in 0..claimed {
-            let descriptor = &buffer[offset as usize];
+        // Empty slots need no ring slot, so the front taken
+        // runs past them.
+        let (mut taken, mut sends) = (0, 0);
+        for descriptor in &buffer[..want as usize] {
+            if !descriptor.is_empty() {
+                if sends == free {
+                    break;
+                }
+                sends += 1;
+            }
+            taken += 1;
+        }
+
+        // The kernel only consumes tx entries, so the free
+        // space checked above cannot shrink.
+        let (claimed, index) = self.tx_ring.claim(sends);
+        assert!(
+            claimed == sends,
+            "Tx ring free space shrank below a checked burst. This is a bug."
+        );
+        let mut offset = 0;
+        for descriptor in &mut buffer[..taken as usize] {
+            if descriptor.is_empty() {
+                continue;
+            }
+
+            let descriptor = mem::take(descriptor);
             self.tx_ring.write_descriptor(
-                tx_index.wrapping_add(offset),
+                index.wrapping_add(offset),
                 descriptor.address(),
                 descriptor.length(),
             );
+            offset += 1;
         }
         self.tx_ring.commit(claimed);
         self.kick();
 
-        claimed
+        taken
     }
 
     /// Returns `buffer`'s frames to the umem's pool instead
-    /// of sending them.
-    pub fn drop(&mut self, buffer: &[XdpDescriptor]) {
+    /// of sending them, emptying their slots.
+    pub fn drop(&mut self, buffer: &mut [XdpDescriptor]) {
         let pool = Umem::global().pool();
-        let mut offset = 0;
-        while offset < buffer.len() {
+        let mut remaining = buffer
+            .iter()
+            .filter(|descriptor| !descriptor.is_empty())
+            .count();
+        let mut frames = buffer
+            .iter_mut()
+            .filter(|descriptor| !descriptor.is_empty());
+        while remaining > 0 {
             // As in `complete`: a failed or short claim only
             // waits on a reader yet to commit.
-            let Ok(mut grant) = pool.bulk_write(buffer.len() - offset) else {
+            let Ok(mut grant) = pool.bulk_write(remaining) else {
                 spin_loop();
                 continue;
             };
 
-            for _ in 0..grant.size() {
+            for descriptor in frames.by_ref().take(grant.size()) {
                 grant
-                    .write(buffer[offset].address())
+                    .write(mem::take(descriptor).address())
                     .expect("Wrote past the grant. This is a bug.");
-                offset += 1;
             }
+            remaining -= grant.size();
         }
     }
 
