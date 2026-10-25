@@ -365,3 +365,17 @@ impl Socket {
         unsafe { xsk_socket__fd(self.socket.as_ptr()) }
     }
 }
+
+/// Counts `buffer`'s descriptors as `(drop, send)`.
+fn scan(buffer: &[XdpDescriptor]) -> (u32, u32) {
+    let (mut drop, mut send) = (0, 0);
+    for descriptor in buffer {
+        if descriptor.is_drop() {
+            drop += 1;
+        } else {
+            send += 1;
+        }
+    }
+
+    (drop, send)
+}

@@ -11,11 +11,17 @@ pub struct XdpDescriptor {
     address: u64,
     /// Frame length in bytes.
     length: u32,
+    /// Indicate whether we want to drop the frame.
+    is_drop: bool,
 }
 
 impl XdpDescriptor {
     pub(crate) fn new(address: u64, length: u32) -> Self {
-        Self { address, length }
+        Self {
+            address,
+            length,
+            is_drop: false,
+        }
     }
 
     /// Offset of the frame within the umem area.
@@ -27,6 +33,18 @@ impl XdpDescriptor {
     /// include the headroom ahead of the frame.
     pub fn length(&self) -> u32 {
         self.length
+    }
+
+    /// Whether the frame is marked to return to the pool
+    /// instead of being sent.
+    pub fn is_drop(&self) -> bool {
+        self.is_drop
+    }
+
+    /// Marks the frame to return to the pool instead of
+    /// being sent. The mark cannot be cleared.
+    pub fn set_drop(&mut self) {
+        self.is_drop = true;
     }
 
     /// A shared view of the buffer: headroom, then the
