@@ -3,7 +3,7 @@
 
 use left_right::Absorb;
 
-use crate::{
+use crate::control::{
     Acl, AclEntry, Addressing, Cidr, ConfigError, Direction, IpFamily, LanPort, MacAddr, PortAcls,
     Role, WanPort,
 };
@@ -270,7 +270,7 @@ fn lan_v6(port: &LanPort) -> Option<Cidr<std::net::Ipv6Addr>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
+    use crate::control::{
         acl::tests::permit_web,
         port::tests::{LAN_MAC, WAN_MAC, lan, wan_static},
     };

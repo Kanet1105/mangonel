@@ -11,7 +11,7 @@ just deps                 # install libxdp/libbpf headers + libclang (bindgen ne
 just build                # cargo test --workspace, then cargo build --release
 just lint                 # cargo sort --workspace -g; cargo +nightly fmt; cargo clippy --release
 
-cargo test -p mangonel-control-plane                      # one crate
+cargo test -p mangonel-gateway                            # one crate
 cargo test -p mangonel-libxdp default_frames_fill_one_socket  # one test (name filter)
 cargo bench -p mangonel-ring                              # criterion: Ring vs ArrayQueue vs Mutex<VecDeque>
 cargo run -p mangonel-nic --example dump [ifname ...]     # print what Nic sees per interface
@@ -31,7 +31,9 @@ The crates are listed from the bottom of the stack up.
 - **mangonel-libxdp**: safe AF_XDP wrapper (details below).
 - **mangonel-nic**: interface facts needed before binding (index, MAC, MTU, driver, queue/channel counts, NUMA node). It combines ioctl/ethtool, sysfs and `/proc/net/route`. `Nic` is a snapshot; it does not update live.
 - **mangonel-ring**: generic bounded MPMC ring `Ring<T>` (details below).
-- **mangonel-control-plane**: configuration (WAN/LAN ports keyed by MAC, Cisco-style extended ACLs, ACL attached per port and direction). It lives in a `left_right` structure. A dedicated thread owns the `WriteHandle`. `ControlHandle` sends an `Op` down an mpsc queue and blocks until the op has been checked and published. `State::check` validates every op before it is appended, so `Absorb` never fails. Data-plane threads each hold their own `Reader` (it is `Send`, not `Sync`) and must keep `ReadGuard`s short, because a held guard blocks the next publish.
+- **mangonel-gateway**: both planes, as modules of one crate so they can refer to each other.
+  - `data`: `DataPlane::new(Vec<Nic>)` sizes the workers to the NIC with the fewest queues (capped by the physical cores on the NICs' NUMA node, CPU 0's core left to the OS), sets every NIC to that many queues, and spawns one pinned worker per queue index. Workers must never call the control plane's blocking write path (`ControlHandle`) from the packet loop.
+  - `control`: configuration (WAN/LAN ports keyed by MAC, Cisco-style extended ACLs, ACL attached per port and direction). It lives in a `left_right` structure. A dedicated thread owns the `WriteHandle`. `ControlHandle` sends an `Op` down an mpsc queue and blocks until the op has been checked and published. `State::check` validates every op before it is appended, so `Absorb` never fails. Data-plane threads each hold their own `Reader` (it is `Send`, not `Sync`) and must keep `ReadGuard`s short, because a held guard blocks the next publish.
 
 ### libxdp ownership model
 

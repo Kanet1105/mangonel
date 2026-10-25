@@ -18,7 +18,9 @@ use std::{
 use left_right::{ReadGuard, ReadHandle, ReadHandleFactory, WriteHandle};
 use thiserror::Error;
 
-use crate::{Acl, AclEntry, ConfigError, Direction, LanPort, MacAddr, State, WanPort, state::Op};
+use crate::control::{
+    Acl, AclEntry, ConfigError, Direction, LanPort, MacAddr, State, WanPort, state::Op,
+};
 
 /// Owner of the control-plane thread.
 ///
@@ -207,7 +209,7 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
+    use crate::control::{
         acl::tests::permit_web,
         port::tests::{LAN_MAC, WAN_MAC, lan, wan_static},
     };
@@ -243,7 +245,7 @@ mod tests {
             handle.remove_lan(LAN_MAC),
             Err(Error::Config(ConfigError::NotFound(
                 LAN_MAC,
-                crate::Role::Lan
+                crate::control::Role::Lan
             )))
         );
         assert!(plane.reader().enter().unwrap().lan_ports().is_empty());

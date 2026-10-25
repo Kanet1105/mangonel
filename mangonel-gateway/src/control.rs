@@ -1,5 +1,5 @@
-//! mangonel-control-plane: configuration for the
-//! AF_XDP data plane.
+//! The control plane: configuration for the AF_XDP data
+//! plane.
 //!
 //! The configuration lives in a [`left_right`] structure
 //! whose single writer is a dedicated thread. Spawn it with
@@ -10,8 +10,6 @@
 //! The state holds WAN and LAN ports ([`WanPort`],
 //! [`LanPort`]), extended access lists ([`acl`]), and which
 //! list filters each port in each direction ([`PortAcls`]).
-
-#![warn(unreachable_pub)]
 
 pub mod acl;
 mod addr;

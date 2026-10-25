@@ -9,7 +9,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
-use crate::ConfigError;
+use crate::control::ConfigError;
 
 /// An Ethernet hardware address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

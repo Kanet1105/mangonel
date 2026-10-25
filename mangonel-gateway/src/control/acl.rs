@@ -12,7 +12,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use crate::{Cidr, ConfigError, IpFamily};
+use crate::control::{Cidr, ConfigError, IpFamily};
 
 /// Longest accepted [`Acl::name`].
 pub const MAX_NAME_LEN: usize = 64;

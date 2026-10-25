@@ -7,7 +7,7 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use crate::{Cidr, ConfigError, IpFamily, MacAddr};
+use crate::control::{Cidr, ConfigError, IpFamily, MacAddr};
 
 /// An uplink towards an ISP.
 #[derive(Debug, Clone, PartialEq, Eq)]
