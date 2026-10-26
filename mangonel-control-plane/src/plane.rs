@@ -11,14 +11,36 @@
 
 use std::{
     io,
-    sync::mpsc::{self, Receiver, Sender},
-    thread::{self, JoinHandle},
+    sync::mpsc::{
+        self,
+        Receiver,
+        Sender,
+    },
+    thread::{
+        self,
+        JoinHandle,
+    },
 };
 
-use left_right::{ReadGuard, ReadHandle, ReadHandleFactory, WriteHandle};
+use left_right::{
+    ReadGuard,
+    ReadHandle,
+    ReadHandleFactory,
+    WriteHandle,
+};
 use thiserror::Error;
 
-use crate::{Acl, AclEntry, ConfigError, Direction, LanPort, MacAddr, State, WanPort, state::Op};
+use crate::{
+    Acl,
+    AclEntry,
+    ConfigError,
+    Direction,
+    LanPort,
+    MacAddr,
+    State,
+    WanPort,
+    state::Op,
+};
 
 /// Owner of the control-plane thread.
 ///
@@ -209,7 +231,12 @@ mod tests {
     use super::*;
     use crate::{
         acl::tests::permit_web,
-        port::tests::{LAN_MAC, WAN_MAC, lan, wan_static},
+        port::tests::{
+            LAN_MAC,
+            WAN_MAC,
+            lan,
+            wan_static,
+        },
     };
 
     #[test]

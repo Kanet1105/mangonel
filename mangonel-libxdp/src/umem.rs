@@ -1,21 +1,39 @@
 use std::{
     ffi::c_void,
     io,
-    ptr::{NonNull, null_mut},
+    ptr::{
+        NonNull,
+        null_mut,
+    },
     sync::OnceLock,
 };
 
 use libc::{
-    _SC_PAGE_SIZE, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_PRIVATE, PROT_READ, PROT_WRITE,
-    mmap, munmap, sysconf,
+    _SC_PAGE_SIZE,
+    MAP_ANONYMOUS,
+    MAP_FAILED,
+    MAP_HUGETLB,
+    MAP_PRIVATE,
+    PROT_READ,
+    PROT_WRITE,
+    mmap,
+    munmap,
+    sysconf,
 };
 use mangonel_libxdp_sys::{
-    xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__get_data, xsk_umem_config,
+    xsk_umem,
+    xsk_umem__create,
+    xsk_umem__delete,
+    xsk_umem__get_data,
+    xsk_umem_config,
 };
 use mangonel_ring::Ring;
 
 use crate::{
-    ring::{Consumer, Producer},
+    ring::{
+        Consumer,
+        Producer,
+    },
     umem::UmemError::UnmapMemory,
     xdp::DEFAULT_FRAME_SIZE,
 };

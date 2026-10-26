@@ -1,6 +1,9 @@
 use std::fmt;
 
-use crate::{Error, Ring};
+use crate::{
+    Error,
+    Ring,
+};
 
 /// Free slots claimed by [`Ring::bulk_write`], filled in
 /// order by [`write`](Self::write). Dropping it publishes

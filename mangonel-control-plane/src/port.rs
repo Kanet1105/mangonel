@@ -5,9 +5,17 @@
 //! disabled on the port. Either kind of port can have an
 //! ACL attached in each direction.
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{
+    Ipv4Addr,
+    Ipv6Addr,
+};
 
-use crate::{Cidr, ConfigError, IpFamily, MacAddr};
+use crate::{
+    Cidr,
+    ConfigError,
+    IpFamily,
+    MacAddr,
+};
 
 /// An uplink towards an ISP.
 #[derive(Debug, Clone, PartialEq, Eq)]

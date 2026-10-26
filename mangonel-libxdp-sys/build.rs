@@ -1,7 +1,10 @@
 //! Generates the bindings from the libxdp headers installed
 //! on this system.
 
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    path::PathBuf,
+};
 
 const WRAPPER: &str = "wrapper.h";
 const HINT: &str = "run `just deps` to install the libxdp development headers";

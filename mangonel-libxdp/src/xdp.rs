@@ -1,21 +1,42 @@
 use std::{
-    ffi::{CString, NulError},
+    ffi::{
+        CString,
+        NulError,
+    },
     io,
-    ptr::{NonNull, null_mut},
-    sync::{Mutex, PoisonError},
+    ptr::{
+        NonNull,
+        null_mut,
+    },
+    sync::{
+        Mutex,
+        PoisonError,
+    },
 };
 
 use mangonel_libxdp_sys::{
-    XSK_RING_PROD__DEFAULT_NUM_DESCS, XSK_UMEM__DEFAULT_FRAME_HEADROOM,
-    XSK_UMEM__DEFAULT_FRAME_SIZE, xsk_socket, xsk_socket__create_shared, xsk_socket_config,
+    XSK_RING_PROD__DEFAULT_NUM_DESCS,
+    XSK_UMEM__DEFAULT_FRAME_HEADROOM,
+    XSK_UMEM__DEFAULT_FRAME_SIZE,
+    xsk_socket,
+    xsk_socket__create_shared,
+    xsk_socket_config,
     xsk_socket_config__bindgen_ty_1,
 };
 
 use crate::{
     descriptor::XdpDescriptor,
-    ring::{Consumer, Producer, RingError, ring_buffer},
+    ring::{
+        Consumer,
+        Producer,
+        RingError,
+        ring_buffer,
+    },
     socket::XdpSocket,
-    umem::{Umem, UmemError},
+    umem::{
+        Umem,
+        UmemError,
+    },
 };
 
 /// Libxdp's default ring depth, for both directions.

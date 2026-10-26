@@ -5,20 +5,27 @@
 //! covers everything:
 //!
 //! - `if_nametoindex` for the index `bind` wants.
-//! - `ioctl` on an `AF_INET` socket for the MAC, MTU and
-//!   flags, plus `SIOCETHTOOL` for driver and channel info.
-//! - `sysfs` for the per-queue directories and the NUMA
-//!   node, which have no ioctl equivalent, and
+//! - `ioctl` on an `AF_INET` socket for the MAC, MTU and flags, plus `SIOCETHTOOL` for driver and
+//!   channel info.
+//! - `sysfs` for the per-queue directories and the NUMA node, which have no ioctl equivalent, and
 //!   `/proc/net/route` for the default route.
 
 use std::{
     ffi::CString,
-    fs, io,
+    fs,
+    io,
     mem::zeroed,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    os::fd::{
+        AsRawFd,
+        FromRawFd,
+        OwnedFd,
+    },
 };
 
-use libc::{c_char, c_int};
+use libc::{
+    c_char,
+    c_int,
+};
 use thiserror::Error;
 
 const ETHTOOL_GDRVINFO: u32 = 0x0000_0003;
