@@ -7,14 +7,28 @@
 
 use std::{
     collections::VecDeque,
-    hint::{black_box, spin_loop},
-    sync::{Barrier, Mutex},
+    hint::{
+        black_box,
+        spin_loop,
+    },
+    sync::{
+        Barrier,
+        Mutex,
+    },
     thread,
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 use criterion::{
-    BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime,
+    BenchmarkGroup,
+    Criterion,
+    Throughput,
+    criterion_group,
+    criterion_main,
+    measurement::WallTime,
 };
 use crossbeam_queue::ArrayQueue;
 use mangonel_ring::Ring;

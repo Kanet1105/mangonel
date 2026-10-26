@@ -1,20 +1,42 @@
 use std::{
     hint::spin_loop,
     mem,
-    ptr::{NonNull, null_mut},
+    ptr::{
+        NonNull,
+        null_mut,
+    },
     sync::PoisonError,
 };
 
-use libc::{MSG_DONTWAIT, POLLIN, SOL_XDP, getsockopt, poll, pollfd, sendto};
+use libc::{
+    MSG_DONTWAIT,
+    POLLIN,
+    SOL_XDP,
+    getsockopt,
+    poll,
+    pollfd,
+    sendto,
+};
 use mangonel_libxdp_sys::{
-    XDP_OPTIONS, XDP_OPTIONS_ZEROCOPY, xdp_options, xsk_socket, xsk_socket__delete, xsk_socket__fd,
+    XDP_OPTIONS,
+    XDP_OPTIONS_ZEROCOPY,
+    xdp_options,
+    xsk_socket,
+    xsk_socket__delete,
+    xsk_socket__fd,
 };
 
 use crate::{
     descriptor::XdpDescriptor,
-    ring::{Consumer, Producer},
+    ring::{
+        Consumer,
+        Producer,
+    },
     umem::Umem,
-    xdp::{BIND, XdpConfig},
+    xdp::{
+        BIND,
+        XdpConfig,
+    },
 };
 
 /// What a bound socket was given: the depths and umem

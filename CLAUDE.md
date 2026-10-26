@@ -18,7 +18,7 @@ cargo run -p mangonel-nic --example dump [ifname ...]     # print what Nic sees 
 ```
 
 - `just lint` rewrites files (`cargo sort` and `fmt`), so it does more than check.
-- `rustfmt.toml` uses nightly-only options (`group_imports = "StdExternalCrate"`, `imports_granularity = "Crate"`, comments wrapped at 60 columns). Always format with `cargo +nightly fmt`. Stable `cargo fmt` gives different output.
+- `rustfmt.toml` uses nightly-only options (`group_imports = "StdExternalCrate"`, `imports_granularity = "Crate"`, comments wrapped at 100 columns, `imports_layout = "Vertical"`). Always format with `cargo +nightly fmt`. Stable `cargo fmt` gives different output.
 - CI (`.github/workflows/ci.yml`) runs `just build` and `just lint` on Ubuntu, Fedora and Arch with Rust **1.88.0**, so code must build on that toolchain. CI triggers only on pushes and PRs to `dev`, not `main`.
 - Unit tests need no privileges. Binding a socket needs root, or CAP_NET_ADMIN plus CAP_SYS_RESOURCE (`bind` raises RLIMIT_MEMLOCK).
 - `mangonel-libxdp-sys` generates bindings from the system's `xdp/xsk.h` at build time. If the headers live outside the default paths, set `BINDGEN_EXTRA_CLANG_ARGS=-I...` and `RUSTFLAGS=-L...`.

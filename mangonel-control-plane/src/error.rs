@@ -4,7 +4,10 @@ use std::net::IpAddr;
 
 use thiserror::Error;
 
-use crate::{MacAddr, Role};
+use crate::{
+    MacAddr,
+    Role,
+};
 
 /// Why a configuration was rejected.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
