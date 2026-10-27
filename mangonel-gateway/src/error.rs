@@ -3,7 +3,10 @@
 
 use std::io;
 
-use crate::{control, data};
+use crate::{
+    control,
+    data,
+};
 
 /// Any error a gateway module returns.
 #[derive(Debug, thiserror::Error)]

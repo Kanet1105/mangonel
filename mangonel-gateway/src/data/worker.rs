@@ -10,26 +10,57 @@
 use std::{
     collections::HashMap,
     mem,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{
+        Ipv4Addr,
+        SocketAddrV4,
+    },
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{
+            AtomicBool,
+            Ordering,
+        },
     },
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
-use mangonel_libxdp::{XdpConfig, XdpDescriptor, XdpSocket, bind};
+use mangonel_libxdp::{
+    XdpConfig,
+    XdpDescriptor,
+    XdpSocket,
+    bind,
+};
 use mangonel_ring::Ring;
 
 use crate::{
     control::{
-        Acl, Addressing, Cidr, Direction, MacAddr, Reader, State, WanIp,
-        acl::{Action, Packet},
+        Acl,
+        Addressing,
+        Cidr,
+        Direction,
+        MacAddr,
+        Reader,
+        State,
+        WanIp,
+        acl::{
+            Action,
+            Packet,
+        },
     },
     data::{
         Error,
-        nat::{Flow, Nat},
-        wire::{self, Ipv4Packet, Transport},
+        nat::{
+            Flow,
+            Nat,
+        },
+        wire::{
+            self,
+            Ipv4Packet,
+            Transport,
+        },
     },
 };
 

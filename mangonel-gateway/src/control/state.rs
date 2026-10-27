@@ -4,8 +4,18 @@
 use left_right::Absorb;
 
 use crate::control::{
-    Acl, AclEntry, Addressing, Cidr, ConfigError, Direction, IpFamily, LanPort, MacAddr, PortAcls,
-    Role, WanPort,
+    Acl,
+    AclEntry,
+    Addressing,
+    Cidr,
+    ConfigError,
+    Direction,
+    IpFamily,
+    LanPort,
+    MacAddr,
+    PortAcls,
+    Role,
+    WanPort,
 };
 
 /// The configuration readers see.
@@ -272,7 +282,12 @@ mod tests {
     use super::*;
     use crate::control::{
         acl::tests::permit_web,
-        port::tests::{LAN_MAC, WAN_MAC, lan, wan_static},
+        port::tests::{
+            LAN_MAC,
+            WAN_MAC,
+            lan,
+            wan_static,
+        },
     };
 
     fn with(ops: impl IntoIterator<Item = Op>) -> State {

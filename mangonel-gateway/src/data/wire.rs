@@ -5,7 +5,10 @@ use std::net::Ipv4Addr;
 
 use crate::control::{
     MacAddr,
-    acl::{self, Packet},
+    acl::{
+        self,
+        Packet,
+    },
 };
 
 const ETHERTYPE_IPV4: u16 = 0x0800;
@@ -414,7 +417,10 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
-    use super::{testing::*, *};
+    use super::{
+        testing::*,
+        *,
+    };
 
     const A_MAC: MacAddr = MacAddr([0x02, 0, 0, 0, 0, 0x0a]);
     const B_MAC: MacAddr = MacAddr([0x02, 0, 0, 0, 0, 0x0b]);

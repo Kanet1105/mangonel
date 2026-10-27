@@ -43,7 +43,10 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::CStr, os::raw::c_char};
+    use std::{
+        ffi::CStr,
+        os::raw::c_char,
+    };
 
     use super::*;
 

@@ -15,10 +15,11 @@ cargo test -p mangonel-gateway                            # one crate
 cargo test -p mangonel-libxdp default_frames_fill_one_socket  # one test (name filter)
 cargo bench -p mangonel-ring                              # criterion: Ring vs ArrayQueue vs Mutex<VecDeque>
 cargo run -p mangonel-nic --example dump [ifname ...]     # print what Nic sees per interface
+scripts/e2e-env.sh up|down|status|check                   # netns topology for e2e tests; sudo is implied
 ```
 
 - `just lint` rewrites files (`cargo sort` and `fmt`), so it does more than check.
-- `rustfmt.toml` uses nightly-only options (`group_imports = "StdExternalCrate"`, `imports_granularity = "Crate"`, comments wrapped at 60 columns). Always format with `cargo +nightly fmt`. Stable `cargo fmt` gives different output.
+- `rustfmt.toml` uses nightly-only options (`group_imports = "StdExternalCrate"`, `imports_granularity = "Crate"`, comments wrapped at 100 columns, `imports_layout = "Vertical"`). Always format with `cargo +nightly fmt`. Stable `cargo fmt` gives different output.
 - CI (`.github/workflows/ci.yml`) runs `just build` and `just lint` on Ubuntu, Fedora and Arch with Rust **1.88.0**, so code must build on that toolchain. CI triggers only on pushes and PRs to `dev`, not `main`.
 - Unit tests need no privileges. Binding a socket needs root, or CAP_NET_ADMIN plus CAP_SYS_RESOURCE (`bind` raises RLIMIT_MEMLOCK).
 - `mangonel-libxdp-sys` generates bindings from the system's `xdp/xsk.h` at build time. If the headers live outside the default paths, set `BINDGEN_EXTRA_CLANG_ARGS=-I...` and `RUSTFLAGS=-L...`.
@@ -31,6 +32,7 @@ The crates are listed from the bottom of the stack up.
 - **mangonel-libxdp**: safe AF_XDP wrapper (details below).
 - **mangonel-nic**: interface facts needed before binding (index, MAC, MTU, driver, queue/channel counts, NUMA node). It combines ioctl/ethtool, sysfs and `/proc/net/route`. `Nic` is a snapshot; it does not update live.
 - **mangonel-ring**: generic bounded MPMC ring `Ring<T>` (details below).
+- **mangonel-dhcp**: DHCPv4 and DHCPv6 servers and clients as sans-I/O state machines over `dhcproto`. The caller owns the sockets or frames and the clock: it passes a UDP payload and `now` in and gets packets to send, lease events and the next wake time out. `v4::server` and `v6::server` each serve one pool; `v4::client` and `v6::client` each hold one lease. Nothing in it needs privileges or threads, so its tests run anywhere.
 - **mangonel-gateway**: both planes, as modules of one crate so they can refer to each other.
   - `data`: `DataPlane::new(Vec<Nic>, Reader)` sizes the workers to the NIC with the fewest queues (capped by the physical cores on the NICs' NUMA node, CPU 0's core left to the OS), sets every NIC to that many queues, and spawns one pinned worker per queue index, bound to that queue on every NIC. Each worker runs a frame to completion in Cisco's order: inbound ACL, then route and NAT (source NAT after routing going out, destination NAT before routing coming in), then outbound ACL. NAT (`nat.rs`) is per worker: each owns a slice of the external ports, and a WAN reply landing on another worker's queue is handed to the owner over a per-pair `Ring`. Workers must never call the control plane's blocking write path (`ControlPlane`'s change methods) from the packet loop.
   - `control`: configuration (WAN/LAN ports keyed by MAC, Cisco-style extended ACLs, ACL attached per port and direction). It lives in a `left_right` structure. A dedicated thread owns the `WriteHandle`. `ControlPlane`'s change methods send an `Op` down an mpsc queue and block until the op has been checked and published; share it by reference or `Arc`. `State::check` validates every op before it is appended, so `Absorb` never fails. Data-plane threads each hold their own `Reader` (it is `Send`, not `Sync`) and must keep `ReadGuard`s short, because a held guard blocks the next publish.

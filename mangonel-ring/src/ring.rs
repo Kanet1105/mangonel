@@ -3,13 +3,23 @@ use std::{
     fmt,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{
+            AtomicUsize,
+            Ordering,
+        },
     },
 };
 
-use crossbeam_utils::{Backoff, CachePadded};
+use crossbeam_utils::{
+    Backoff,
+    CachePadded,
+};
 
-use crate::{BulkRead, BulkWrite, Error};
+use crate::{
+    BulkRead,
+    BulkWrite,
+    Error,
+};
 
 /// A bounded MPMC ring of `T`. Clones share the same
 /// slots.

@@ -2,13 +2,20 @@
 //! NICs' NUMA node, bound to that queue on every NIC.
 
 use std::{
-    fs, io,
+    fs,
+    io,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{
+            AtomicBool,
+            Ordering,
+        },
         mpsc,
     },
-    thread::{self, JoinHandle},
+    thread::{
+        self,
+        JoinHandle,
+    },
 };
 
 use core_affinity::CoreId;
@@ -17,10 +24,18 @@ use mangonel_nic::nic::Nic;
 use mangonel_ring::Ring;
 
 use crate::{
-    control::{MacAddr, Reader},
+    control::{
+        MacAddr,
+        Reader,
+    },
     data::{
         Error,
-        worker::{HANDOFF_DEPTH, Handoff, Handoffs, Worker},
+        worker::{
+            HANDOFF_DEPTH,
+            Handoff,
+            Handoffs,
+            Worker,
+        },
     },
 };
 

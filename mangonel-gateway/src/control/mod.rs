@@ -18,10 +18,31 @@ mod plane;
 mod port;
 mod state;
 
-pub use acl::{Acl, AclEntry};
-pub use addr::{Cidr, IpFamily, MacAddr};
+pub use acl::{
+    Acl,
+    AclEntry,
+};
+pub use addr::{
+    Cidr,
+    IpFamily,
+    MacAddr,
+};
 pub use error::ConfigError;
 pub use left_right::ReadGuard;
-pub use plane::{ControlPlane, Error, Reader};
-pub use port::{Addressing, Direction, Dns, LanIp, LanPort, PortAcls, Role, WanIp, WanPort};
+pub use plane::{
+    ControlPlane,
+    Error,
+    Reader,
+};
+pub use port::{
+    Addressing,
+    Direction,
+    Dns,
+    LanIp,
+    LanPort,
+    PortAcls,
+    Role,
+    WanIp,
+    WanPort,
+};
 pub use state::State;

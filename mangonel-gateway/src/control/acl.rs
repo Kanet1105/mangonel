@@ -10,9 +10,17 @@
 //! are both [`AddrMatch::Any`] matches IPv4 and IPv6 alike;
 //! naming a prefix pins the entry to that prefix's family.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{
+    IpAddr,
+    Ipv4Addr,
+    Ipv6Addr,
+};
 
-use crate::control::{Cidr, ConfigError, IpFamily};
+use crate::control::{
+    Cidr,
+    ConfigError,
+    IpFamily,
+};
 
 /// Longest accepted [`Acl::name`].
 pub const MAX_NAME_LEN: usize = 64;

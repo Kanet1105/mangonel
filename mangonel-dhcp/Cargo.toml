@@ -1,0 +1,12 @@
+[package]
+name = "mangonel-dhcp"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+dhcproto = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

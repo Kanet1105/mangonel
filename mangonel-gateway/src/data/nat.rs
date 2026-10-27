@@ -9,10 +9,17 @@
 use std::{
     collections::HashMap,
     net::SocketAddrV4,
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
-use crate::data::wire::{ICMP, TCP, UDP};
+use crate::data::wire::{
+    ICMP,
+    TCP,
+    UDP,
+};
 
 /// External ports below this are never handed out.
 const FIRST_PORT: u16 = 1024;
