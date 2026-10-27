@@ -15,6 +15,7 @@ cargo test -p mangonel-control-plane                      # one crate
 cargo test -p mangonel-libxdp default_frames_fill_one_socket  # one test (name filter)
 cargo bench -p mangonel-ring                              # criterion: Ring vs ArrayQueue vs Mutex<VecDeque>
 cargo run -p mangonel-nic --example dump [ifname ...]     # print what Nic sees per interface
+scripts/e2e-env.sh up|down|status|check                   # netns topology for e2e tests; sudo is implied
 ```
 
 - `just lint` rewrites files (`cargo sort` and `fmt`), so it does more than check.
