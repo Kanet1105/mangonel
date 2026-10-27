@@ -32,6 +32,7 @@ The crates are listed from the bottom of the stack up.
 - **mangonel-libxdp**: safe AF_XDP wrapper (details below).
 - **mangonel-nic**: interface facts needed before binding (index, MAC, MTU, driver, queue/channel counts, NUMA node). It combines ioctl/ethtool, sysfs and `/proc/net/route`. `Nic` is a snapshot; it does not update live.
 - **mangonel-ring**: generic bounded MPMC ring `Ring<T>` (details below).
+- **mangonel-dhcp**: DHCPv4 and DHCPv6 servers and clients as sans-I/O state machines over `dhcproto`. The caller owns the sockets or frames and the clock: it passes a UDP payload and `now` in and gets packets to send, lease events and the next wake time out. `v4::server` and `v6::server` each serve one pool; `v4::client` and `v6::client` each hold one lease. Nothing in it needs privileges or threads, so its tests run anywhere.
 - **mangonel-control-plane**: configuration (WAN/LAN ports keyed by MAC, Cisco-style extended ACLs, ACL attached per port and direction). It lives in a `left_right` structure. A dedicated thread owns the `WriteHandle`. `ControlHandle` sends an `Op` down an mpsc queue and blocks until the op has been checked and published. `State::check` validates every op before it is appended, so `Absorb` never fails. Data-plane threads each hold their own `Reader` (it is `Send`, not `Sync`) and must keep `ReadGuard`s short, because a held guard blocks the next publish.
 
 ### libxdp ownership model
