@@ -9,26 +9,37 @@
 # Every box is a network namespace and every link a veth pair, so nothing here
 # touches the host's interfaces, firewall or NetworkManager.
 #
-#   test-wan      test-gateway        test-switch              test-node-0
-#   +------+      +-----------+       +-----------+            +------+
-#   | eth0 +------+ wan   lan +-------+ gw        |      +-----+ eth0 |
-#   +------+      +-----------+       |     node0 +------+     +------+
-#                                     | br0 node1 +------- test-node-1 eth0
-#                                     |     node2 +------- test-node-2 eth0
-#                                     +-----------+
+#   test-wan      test-gateway              test-switch               test-node-1
+#   +------+      +---------------+         +------------+            +------+
+#   | eth0 +------+ wan     lan-1 +---------+ lan-1      |      +-----+ eth0 |
+#   +------+      |               |         |     node-1 +------+     +------+
+#                 | tap-0   lan-0 +----+    | br0 node-2 +------------ test-node-2 eth0
+#                 +---------------+    |    +------------+
+#                                      |
+#                                      |    test-node-0
+#                                      +----- eth0
 #
-#   namespace     iface  MAC                IPv4
-#   test-gateway  wan    02:00:00:01:00:01  none; 203.0.113.2/24 is mangonel's to claim
-#   test-gateway  lan    02:00:00:01:00:02  none; 10.0.0.1/24 is mangonel's to claim
-#   test-wan      eth0   02:00:00:02:00:01  203.0.113.1/24, the upstream router
-#   test-switch   br0    02:00:00:03:00:00  none; a dumb switch with no IP stack
-#   test-switch   gw     02:00:00:03:00:01  bridge port, peer of test-gateway lan
-#   test-switch   nodeN  02:00:00:03:01:0N  bridge port, peer of test-node-N eth0
-#   test-node-N   eth0   02:00:00:04:00:0N  none, neither v4 nor v6; the gateway hands them out
+#   namespace     iface   MAC                IPv4
+#   test-gateway  wan     02:00:00:01:00:01  none; 203.0.113.2/24 is mangonel's to claim
+#   test-gateway  lan-0   02:00:00:01:00:02  none; 10.0.0.1/24 is mangonel's to claim
+#   test-gateway  lan-1   02:00:00:01:00:03  none; 10.0.1.1/24 is mangonel's to claim
+#   test-gateway  tap-0   02:00:00:01:00:10  none; the host stack's door, see below
+#   test-wan      eth0    02:00:00:02:00:01  203.0.113.1/24, the upstream router
+#   test-switch   br0     02:00:00:03:00:00  none; a dumb switch with no IP stack
+#   test-switch   lan-1   02:00:00:03:00:01  bridge port, peer of test-gateway lan-1
+#   test-switch   node-N  02:00:00:03:01:0N  bridge port, peer of test-node-N eth0, N = 1, 2
+#   test-node-0   eth0    02:00:00:04:00:00  none; peer of test-gateway lan-0
+#   test-node-N   eth0    02:00:00:04:00:0N  none, neither v4 nor v6; the gateway hands them out
 #
 # The gateway's kernel gets no address and does not forward, so whatever crosses
-# it crossed through mangonel. test-wan has no route back to 10.0.0.0/24, like a
+# it crossed through mangonel. test-wan has no route back to the LANs, like a
 # real upstream, so LAN traffic needs NAT to get a reply.
+#
+# tap-0 is a persistent multi-queue TAP for the gateway's own kernel stack: a
+# DHCP server or sshd binds to it, and the data plane copies frames between it
+# and a LAN port. Open it with IFF_TAP | IFF_NO_PI | IFF_MULTI_QUEUE and give it
+# the MAC and address of the LAN port it fronts. It has no carrier until a
+# process holds a queue open, so check leaves it out of the carrier test.
 #
 # Run the gateway in its namespace:    ip netns exec test-gateway <command>
 # Watch the LAN from the switch:       ip netns exec test-switch tcpdump -i br0
@@ -47,6 +58,14 @@ NODES=(test-node-0 test-node-1 test-node-2)
 ALL=("$GATEWAY" "$WAN" "$SWITCH" "${NODES[@]}")
 
 UPSTREAM_IP=203.0.113.1/24
+
+# The ethtool settings for a veth end that faces the gateway. With tx checksum
+# offload off the kernel finishes checksums before a frame crosses the pair,
+# instead of leaving the partial sum it would hand a real NIC, which AF_XDP
+# would read as garbage, and no segmentation offload means frames arrive no
+# larger than the MTU. gro on is how veth enables NAPI without an XDP program,
+# and the gateway's AF_XDP transmit into this end needs NAPI on.
+FACING_GATEWAY=(tx off tso off gso off gro on)
 
 FAIL=0
 
@@ -91,9 +110,10 @@ up() {
     done
 
     veth "$GATEWAY" wan 02:00:00:01:00:01 "$WAN" eth0 02:00:00:02:00:01
-    veth "$GATEWAY" lan 02:00:00:01:00:02 "$SWITCH" gw 02:00:00:03:00:01
-    for i in 0 1 2; do
-        veth "${NODES[i]}" eth0 "02:00:00:04:00:0$i" "$SWITCH" "node$i" "02:00:00:03:01:0$i"
+    veth "$GATEWAY" lan-0 02:00:00:01:00:02 "${NODES[0]}" eth0 02:00:00:04:00:00
+    veth "$GATEWAY" lan-1 02:00:00:01:00:03 "$SWITCH" lan-1 02:00:00:03:00:01
+    for i in 1 2; do
+        veth "${NODES[i]}" eth0 "02:00:00:04:00:0$i" "$SWITCH" "node-$i" "02:00:00:03:01:0$i"
     done
 
     # A dumb switch has no IP stack, so it never puts frames of its own on the
@@ -102,7 +122,7 @@ up() {
         net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1
     ip -n "$SWITCH" link add br0 address 02:00:00:03:00:00 type bridge
     ip -n "$SWITCH" link set br0 up
-    for port in gw node0 node1 node2; do
+    for port in lan-1 node-1 node-2; do
         ip -n "$SWITCH" link set "$port" master br0 up
     done
 
@@ -111,7 +131,10 @@ up() {
     ip netns exec "$GATEWAY" sysctl -q -w \
         net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
     ip -n "$GATEWAY" link set wan up
-    ip -n "$GATEWAY" link set lan up
+    ip -n "$GATEWAY" link set lan-0 up
+    ip -n "$GATEWAY" link set lan-1 up
+    ip -n "$GATEWAY" tuntap add dev tap-0 mode tap multi_queue
+    ip -n "$GATEWAY" link set tap-0 address 02:00:00:01:00:10 up
 
     ip -n "$WAN" addr add "$UPSTREAM_IP" dev eth0
     ip -n "$WAN" link set eth0 up
@@ -123,14 +146,11 @@ up() {
         ip -n "$ns" link set eth0 up
     done
 
-    # The two veth ends that face the gateway. With tx checksum offload off the
-    # kernel finishes checksums before a frame crosses the pair, instead of
-    # leaving the partial sum it would hand a real NIC, which AF_XDP would read
-    # as garbage, and no segmentation offload means frames arrive no larger than
-    # the MTU. gro on is how veth enables NAPI without an XDP program, and
-    # the gateway's AF_XDP transmit into this end needs NAPI on.
-    ip netns exec "$SWITCH" ethtool -K gw tx off tso off gso off gro on >/dev/null
-    ip netns exec "$WAN" ethtool -K eth0 tx off tso off gso off gro on >/dev/null
+    # The three veth ends that face the gateway: the upstream, the switch port
+    # on lan-1, and node-0 itself on lan-0.
+    ip netns exec "$WAN" ethtool -K eth0 "${FACING_GATEWAY[@]}" >/dev/null
+    ip netns exec "$SWITCH" ethtool -K lan-1 "${FACING_GATEWAY[@]}" >/dev/null
+    ip netns exec "${NODES[0]}" ethtool -K eth0 "${FACING_GATEWAY[@]}" >/dev/null
 
     trap - ERR
     check
@@ -169,9 +189,10 @@ check() {
     done
     echo "check:"
 
+    # Every link but lo and the TAP, which has no carrier until opened.
     for ns in "${ALL[@]}"; do
         dead=$(ip -n "$ns" -br link |
-            awk '$1 != "lo" && $4 !~ /LOWER_UP/ { sub(/@.*/, "", $1); print $1 }' |
+            awk '$1 != "lo" && $1 !~ /^tap-/ && $4 !~ /LOWER_UP/ { sub(/@.*/, "", $1); print $1 }' |
             paste -sd ' ')
         if [ -z "$dead" ]; then
             ok "$ns: every link has carrier"
@@ -180,13 +201,19 @@ check() {
         fi
     done
 
+    if ip -n "$GATEWAY" -d link show dev tap-0 | grep -q 'tun type tap'; then
+        ok "$GATEWAY: tap-0 is a TAP"
+    else
+        bad "$GATEWAY: tap-0 is missing or not a TAP"
+    fi
+
     ports=$(bridge -n "$SWITCH" link |
         awk '/master br0 state forwarding/ { sub(/@.*/, "", $2); print $2 }' |
         sort | paste -sd ' ')
-    if [ "$ports" = "gw node0 node1 node2" ]; then
-        ok "$SWITCH: gw node0 node1 node2 forward on br0"
+    if [ "$ports" = "lan-1 node-1 node-2" ]; then
+        ok "$SWITCH: lan-1 node-1 node-2 forward on br0"
     else
-        bad "$SWITCH: ports forwarding on br0 are '$ports', not 'gw node0 node1 node2'"
+        bad "$SWITCH: ports forwarding on br0 are '$ports', not 'lan-1 node-1 node-2'"
     fi
 
     for ns in "${NODES[@]}"; do
