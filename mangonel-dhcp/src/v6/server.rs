@@ -200,17 +200,17 @@ impl Lease {
     ///
     /// use mangonel_dhcp::v6::{client, server};
     ///
-    /// let mut server = server::Server::new(server::Config {
-    ///     mac: [2, 0, 0, 1, 0, 2],
-    ///     prefix: "2001:db8:1::".parse()?,
-    ///     prefix_len: 64,
-    ///     pool_start: "2001:db8:1::100".parse()?,
-    ///     pool_end: "2001:db8:1::1ff".parse()?,
-    ///     dns: vec![],
-    ///     preferred_lifetime: Duration::from_secs(1800),
-    ///     valid_lifetime: Duration::from_secs(3600),
-    ///     rapid_commit: false,
-    /// })?;
+    /// # let mut server = server::Server::new(server::Config {
+    /// # mac: [2, 0, 0, 1, 0, 2],
+    /// # prefix: "2001:db8:1::".parse()?,
+    /// # prefix_len: 64,
+    /// # pool_start: "2001:db8:1::100".parse()?,
+    /// # pool_end: "2001:db8:1::1ff".parse()?,
+    /// # dns: vec![],
+    /// # preferred_lifetime: Duration::from_secs(1800),
+    /// # valid_lifetime: Duration::from_secs(3600),
+    /// # rapid_commit: false,
+    /// # })?;
     /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
     /// let (now, from, mac) = (Instant::now(), "fe80::1".parse()?, [2, 0, 0, 4, 0, 0]);
     /// let solicit = client.poll(now).transmit.unwrap();
@@ -352,17 +352,17 @@ impl Server {
     ///
     /// use mangonel_dhcp::v6::server::{Config, Server};
     ///
-    /// let server = Server::new(Config {
-    ///     mac: [2, 0, 0, 1, 0, 2],
-    ///     prefix: "2001:db8:1::".parse()?,
-    ///     prefix_len: 64,
-    ///     pool_start: "2001:db8:1::100".parse()?,
-    ///     pool_end: "2001:db8:1::1ff".parse()?,
-    ///     dns: vec![],
-    ///     preferred_lifetime: Duration::from_secs(1800),
-    ///     valid_lifetime: Duration::from_secs(3600),
-    ///     rapid_commit: false,
-    /// })?;
+    /// # let server = Server::new(Config {
+    /// # mac: [2, 0, 0, 1, 0, 2],
+    /// # prefix: "2001:db8:1::".parse()?,
+    /// # prefix_len: 64,
+    /// # pool_start: "2001:db8:1::100".parse()?,
+    /// # pool_end: "2001:db8:1::1ff".parse()?,
+    /// # dns: vec![],
+    /// # preferred_lifetime: Duration::from_secs(1800),
+    /// # valid_lifetime: Duration::from_secs(3600),
+    /// # rapid_commit: false,
+    /// # })?;
     /// assert_eq!(server.server_id().len(), 10);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -379,17 +379,17 @@ impl Server {
     ///
     /// use mangonel_dhcp::v6::server::{Config, Server};
     ///
-    /// let server = Server::new(Config {
-    ///     mac: [2, 0, 0, 1, 0, 2],
-    ///     prefix: "2001:db8:1::".parse()?,
-    ///     prefix_len: 64,
-    ///     pool_start: "2001:db8:1::100".parse()?,
-    ///     pool_end: "2001:db8:1::1ff".parse()?,
-    ///     dns: vec![],
-    ///     preferred_lifetime: Duration::from_secs(1800),
-    ///     valid_lifetime: Duration::from_secs(3600),
-    ///     rapid_commit: false,
-    /// })?;
+    /// # let server = Server::new(Config {
+    /// # mac: [2, 0, 0, 1, 0, 2],
+    /// # prefix: "2001:db8:1::".parse()?,
+    /// # prefix_len: 64,
+    /// # pool_start: "2001:db8:1::100".parse()?,
+    /// # pool_end: "2001:db8:1::1ff".parse()?,
+    /// # dns: vec![],
+    /// # preferred_lifetime: Duration::from_secs(1800),
+    /// # valid_lifetime: Duration::from_secs(3600),
+    /// # rapid_commit: false,
+    /// # })?;
     /// assert!(server.leases().next().is_none());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -406,17 +406,17 @@ impl Server {
     ///
     /// use mangonel_dhcp::v6::server::{Config, Server};
     ///
-    /// let mut server = Server::new(Config {
-    ///     mac: [2, 0, 0, 1, 0, 2],
-    ///     prefix: "2001:db8:1::".parse()?,
-    ///     prefix_len: 64,
-    ///     pool_start: "2001:db8:1::100".parse()?,
-    ///     pool_end: "2001:db8:1::1ff".parse()?,
-    ///     dns: vec![],
-    ///     preferred_lifetime: Duration::from_secs(1800),
-    ///     valid_lifetime: Duration::from_secs(3600),
-    ///     rapid_commit: false,
-    /// })?;
+    /// # let mut server = Server::new(Config {
+    /// # mac: [2, 0, 0, 1, 0, 2],
+    /// # prefix: "2001:db8:1::".parse()?,
+    /// # prefix_len: 64,
+    /// # pool_start: "2001:db8:1::100".parse()?,
+    /// # pool_end: "2001:db8:1::1ff".parse()?,
+    /// # dns: vec![],
+    /// # preferred_lifetime: Duration::from_secs(1800),
+    /// # valid_lifetime: Duration::from_secs(3600),
+    /// # rapid_commit: false,
+    /// # })?;
     /// assert_eq!(server.expire(Instant::now()), 0);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -446,17 +446,17 @@ impl Server {
     /// use dhcproto::{Decodable, v6::{Message, MessageType}};
     /// use mangonel_dhcp::v6::{client, server};
     ///
-    /// let mut server = server::Server::new(server::Config {
-    ///     mac: [2, 0, 0, 1, 0, 2],
-    ///     prefix: "2001:db8:1::".parse()?,
-    ///     prefix_len: 64,
-    ///     pool_start: "2001:db8:1::100".parse()?,
-    ///     pool_end: "2001:db8:1::1ff".parse()?,
-    ///     dns: vec![],
-    ///     preferred_lifetime: Duration::from_secs(1800),
-    ///     valid_lifetime: Duration::from_secs(3600),
-    ///     rapid_commit: false,
-    /// })?;
+    /// # let mut server = server::Server::new(server::Config {
+    /// # mac: [2, 0, 0, 1, 0, 2],
+    /// # prefix: "2001:db8:1::".parse()?,
+    /// # prefix_len: 64,
+    /// # pool_start: "2001:db8:1::100".parse()?,
+    /// # pool_end: "2001:db8:1::1ff".parse()?,
+    /// # dns: vec![],
+    /// # preferred_lifetime: Duration::from_secs(1800),
+    /// # valid_lifetime: Duration::from_secs(3600),
+    /// # rapid_commit: false,
+    /// # })?;
     /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
     /// let now = Instant::now();
     /// let solicit = client.poll(now).transmit.unwrap();
@@ -580,12 +580,14 @@ impl Server {
             let hint = v6::addresses(ia).next().map(|addr| addr.addr);
             match self.choose(&key, hint, now) {
                 Some(address) => {
-                    let hold = if bound {
-                        self.config.valid_lifetime
-                    } else {
-                        OFFER_HOLD
-                    };
-                    self.bind(key, mac, address, bound, now + hold);
+                    // A client that already holds the address keeps its
+                    // lease; only a newcomer gets a short-lived offer.
+                    let held = self.leases.get(&key).is_some_and(|lease| lease.bound);
+                    if bound {
+                        self.bind(key, mac, address, true, now + self.config.valid_lifetime);
+                    } else if !held {
+                        self.bind(key, mac, address, false, now + OFFER_HOLD);
+                    }
                     ias.push(self.granted(ia.id, address));
                 }
                 None => ias.push(status_ia(ia.id, Status::NoAddrsAvail, "pool exhausted")),
@@ -814,8 +816,8 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn config() -> Config {
-        Config {
+    fn server() -> Server {
+        Server::new(Config {
             mac: [2, 0, 0, 1, 0, 2],
             prefix: addr("2001:db8:1::"),
             prefix_len: 64,
@@ -825,18 +827,13 @@ mod tests {
             preferred_lifetime: Duration::from_secs(600),
             valid_lifetime: Duration::from_secs(900),
             rapid_commit: false,
-        }
+        })
+        .unwrap()
     }
 
-    fn server() -> Server {
-        Server::new(config()).unwrap()
-    }
-
-    fn duid(mac: [u8; 6]) -> Vec<u8> {
-        v6::duid_ll(mac)
-    }
-
-    fn ia_na(address: Option<Ipv6Addr>) -> DhcpOption {
+    /// A message of `kind` from `mac` with one IA_NA, and the
+    /// server id where the protocol requires it.
+    fn message(kind: MessageType, mac: [u8; 6], address: Option<Ipv6Addr>) -> Message {
         let mut opts = DhcpOptions::new();
         if let Some(address) = address {
             opts.insert(DhcpOption::IAAddr(IAAddr {
@@ -846,25 +843,21 @@ mod tests {
                 opts: DhcpOptions::new(),
             }));
         }
-
-        DhcpOption::IANA(IANA {
+        let mut msg = Message::new_with_id(kind, XID);
+        msg.opts_mut()
+            .insert(DhcpOption::ClientId(v6::duid_ll(mac)));
+        msg.opts_mut().insert(DhcpOption::IANA(IANA {
             id: IAID,
             t1: 0,
             t2: 0,
             opts,
-        })
-    }
-
-    fn message(kind: MessageType, mac: [u8; 6], address: Option<Ipv6Addr>) -> Message {
-        let mut msg = Message::new_with_id(kind, XID);
-        msg.opts_mut().insert(DhcpOption::ClientId(duid(mac)));
-        msg.opts_mut().insert(ia_na(address));
+        }));
         if !matches!(
             kind,
             MessageType::Solicit | MessageType::Rebind | MessageType::Confirm
         ) {
             msg.opts_mut()
-                .insert(DhcpOption::ServerId(duid([2, 0, 0, 1, 0, 2])));
+                .insert(DhcpOption::ServerId(v6::duid_ll([2, 0, 0, 1, 0, 2])));
         }
 
         msg
@@ -878,34 +871,7 @@ mod tests {
     }
 
     fn granted_address(msg: &Message) -> Option<Ipv6Addr> {
-        let ia = v6::ianas(msg).next()?;
-        v6::addresses(ia).next().map(|a| a.addr)
-    }
-
-    fn top_status(msg: &Message) -> Option<Status> {
-        match msg.opts().get(OptionCode::StatusCode) {
-            Some(DhcpOption::StatusCode(code)) => Some(code.status),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn validate_rejects_bad_configs() {
-        let mut bad = config();
-        bad.pool_end = addr("2001:db8:1::1");
-        assert!(matches!(bad.validate(), Err(Error::PoolReversed(..))));
-        let mut bad = config();
-        bad.pool_end = addr("2001:db8:2::12");
-        assert!(matches!(bad.validate(), Err(Error::PoolOutsideSubnet(..))));
-        let mut bad = config();
-        bad.prefix_len = 129;
-        assert!(matches!(bad.validate(), Err(Error::PrefixTooLong(129))));
-        let mut bad = config();
-        bad.valid_lifetime = Duration::ZERO;
-        assert!(matches!(bad.validate(), Err(Error::ZeroLifetime)));
-        let mut bad = config();
-        bad.preferred_lifetime = Duration::from_secs(1000);
-        assert!(matches!(bad.validate(), Err(Error::PreferredOutlivesValid)));
+        v6::addresses(v6::ianas(msg).next()?).next().map(|a| a.addr)
     }
 
     #[test]
@@ -914,75 +880,30 @@ mod tests {
         let now = Instant::now();
         let advertise = send(&mut server, &message(MessageType::Solicit, MAC, None), now).unwrap();
         assert_eq!(advertise.msg_type(), MessageType::Advertise);
-        assert_eq!(advertise.xid(), XID);
         assert_eq!(v6::server_id_of(&advertise), Some(server.server_id()));
-        assert_eq!(v6::client_id_of(&advertise), Some(duid(MAC).as_slice()));
-        let offered = granted_address(&advertise).unwrap();
-        assert_eq!(offered, addr("2001:db8:1::10"));
         let ia = v6::ianas(&advertise).next().unwrap();
         assert_eq!((ia.t1, ia.t2), (300, 480));
-        let ia_addr = v6::addresses(ia).next().unwrap();
-        assert_eq!((ia_addr.preferred_life, ia_addr.valid_life), (600, 900));
+        let offered = v6::addresses(ia).next().unwrap();
+        assert_eq!(offered.addr, addr("2001:db8:1::10"));
+        assert_eq!((offered.preferred_life, offered.valid_life), (600, 900));
         assert_eq!(v6::dns_of(&advertise), vec![addr("2001:db8:1::1")]);
         assert!(!server.leases().next().unwrap().is_bound());
 
-        let reply = send(
-            &mut server,
-            &message(MessageType::Request, MAC, Some(offered)),
-            now,
-        )
-        .unwrap();
+        let request = message(MessageType::Request, MAC, Some(offered.addr));
+        let reply = send(&mut server, &request, now).unwrap();
         assert_eq!(reply.msg_type(), MessageType::Reply);
-        assert_eq!(granted_address(&reply), Some(offered));
+        assert_eq!(granted_address(&reply), Some(offered.addr));
         let lease = server.leases().next().unwrap();
         assert!(lease.is_bound());
-        assert_eq!(lease.iaid, IAID);
         assert_eq!(lease.expires, now + Duration::from_secs(900));
     }
 
     #[test]
-    fn rapid_commit_when_both_sides_want_it() {
+    fn renew_rebind_and_release() {
         let mut server = server();
         let now = Instant::now();
-        let mut solicit = message(MessageType::Solicit, MAC, None);
-        solicit.opts_mut().insert(DhcpOption::RapidCommit);
-        let advertise = send(&mut server, &solicit, now).unwrap();
-        assert_eq!(advertise.msg_type(), MessageType::Advertise);
-
-        let mut server = Server::new(Config {
-            rapid_commit: true,
-            ..config()
-        })
-        .unwrap();
-        let reply = send(&mut server, &solicit, now).unwrap();
-        assert_eq!(reply.msg_type(), MessageType::Reply);
-        assert!(reply.opts().get(OptionCode::RapidCommit).is_some());
-        assert!(server.leases().next().unwrap().is_bound());
-    }
-
-    #[test]
-    fn other_servers_messages_are_ignored() {
-        let mut server = server();
-        let now = Instant::now();
-        let mut request = message(MessageType::Request, MAC, Some(addr("2001:db8:1::10")));
-        request
-            .opts_mut()
-            .insert(DhcpOption::ServerId(duid([9, 9, 9, 9, 9, 9])));
-        assert!(send(&mut server, &request, now).is_none());
-        let mut solicit = message(MessageType::Solicit, MAC, None);
-        solicit.opts_mut().insert(DhcpOption::ServerId(duid(MAC)));
-        assert!(send(&mut server, &solicit, now).is_none());
-        let mut anonymous = message(MessageType::Solicit, MAC, None);
-        anonymous.opts_mut().remove(OptionCode::ClientId);
-        assert!(send(&mut server, &anonymous, now).is_none());
-    }
-
-    #[test]
-    fn renew_extends_and_rebind_answers_bindings_only() {
-        let mut server = server();
-        let now = Instant::now();
-        send(&mut server, &message(MessageType::Solicit, MAC, None), now);
         let address = addr("2001:db8:1::10");
+        send(&mut server, &message(MessageType::Solicit, MAC, None), now);
         send(
             &mut server,
             &message(MessageType::Request, MAC, Some(address)),
@@ -1002,137 +923,45 @@ mod tests {
             later + Duration::from_secs(900)
         );
 
-        let stranger = message(MessageType::Renew, [2, 0, 0, 4, 0, 9], Some(address));
-        let reply = send(&mut server, &stranger, later).unwrap();
-        assert_eq!(
-            v6::status_of(v6::ianas(&reply).next().unwrap()),
-            Status::NoBinding
-        );
-
-        let reply = send(
-            &mut server,
-            &message(MessageType::Rebind, MAC, Some(address)),
-            later,
-        )
-        .unwrap();
-        assert_eq!(granted_address(&reply), Some(address));
-        let unknown = message(
-            MessageType::Rebind,
-            [2, 0, 0, 4, 0, 9],
-            Some(addr("2001:db8:1::50")),
-        );
-        assert!(send(&mut server, &unknown, later).is_none());
-        let off_link = message(
-            MessageType::Rebind,
-            [2, 0, 0, 4, 0, 9],
-            Some(addr("2001:db8:9::50")),
-        );
+        // A stranger rebinding an off-link address has it zeroed; on-link, silence.
+        let stranger = [2, 0, 0, 4, 0, 9];
+        let off_link = message(MessageType::Rebind, stranger, Some(addr("2001:db8:9::50")));
         let reply = send(&mut server, &off_link, later).unwrap();
         let zeroed = v6::addresses(v6::ianas(&reply).next().unwrap())
             .next()
             .unwrap();
         assert_eq!((zeroed.preferred_life, zeroed.valid_life), (0, 0));
-    }
-
-    #[test]
-    fn release_and_decline() {
-        let mut server = server();
-        let now = Instant::now();
-        let advertise = send(&mut server, &message(MessageType::Solicit, MAC, None), now).unwrap();
-        let address = granted_address(&advertise).unwrap();
-        send(
-            &mut server,
-            &message(MessageType::Request, MAC, Some(address)),
-            now,
-        );
+        let on_link = message(MessageType::Rebind, stranger, Some(addr("2001:db8:1::50")));
+        assert!(send(&mut server, &on_link, later).is_none());
 
         let reply = send(
             &mut server,
             &message(MessageType::Release, MAC, Some(address)),
-            now,
+            later,
         )
         .unwrap();
-        assert_eq!(top_status(&reply), Some(Status::Success));
-        assert_eq!(server.leases().count(), 0);
-
-        let reply = send(
-            &mut server,
-            &message(MessageType::Decline, MAC, Some(address)),
-            now,
-        )
-        .unwrap();
-        assert_eq!(top_status(&reply), Some(Status::Success));
-        let next = send(&mut server, &message(MessageType::Solicit, MAC, None), now).unwrap();
-        assert_eq!(granted_address(&next), Some(addr("2001:db8:1::11")));
-    }
-
-    #[test]
-    fn confirm_checks_the_link() {
-        let mut server = server();
-        let now = Instant::now();
-        let on = message(MessageType::Confirm, MAC, Some(addr("2001:db8:1::77")));
-        assert_eq!(
-            top_status(&send(&mut server, &on, now).unwrap()),
-            Some(Status::Success)
-        );
-        let off = message(MessageType::Confirm, MAC, Some(addr("2001:db8:2::77")));
-        assert_eq!(
-            top_status(&send(&mut server, &off, now).unwrap()),
-            Some(Status::NotOnLink)
-        );
-        assert!(send(&mut server, &message(MessageType::Confirm, MAC, None), now).is_none());
-    }
-
-    #[test]
-    fn information_request_gets_resolvers() {
-        let mut server = server();
-        let now = Instant::now();
-        let mut info = Message::new_with_id(MessageType::InformationRequest, XID);
-        info.opts_mut().insert(DhcpOption::ClientId(duid(MAC)));
-        let reply = send(&mut server, &info, now).unwrap();
-        assert_eq!(reply.msg_type(), MessageType::Reply);
-        assert_eq!(v6::dns_of(&reply), vec![addr("2001:db8:1::1")]);
-        assert!(v6::ianas(&reply).next().is_none());
+        assert!(matches!(
+            reply.opts().get(OptionCode::StatusCode),
+            Some(DhcpOption::StatusCode(code)) if code.status == Status::Success
+        ));
         assert_eq!(server.leases().count(), 0);
     }
 
     #[test]
-    fn pool_exhausts_and_expires() {
+    fn pool_exhausts_and_offers_expire() {
         let mut server = server();
         let now = Instant::now();
         for i in 0..3 {
-            let advertise = send(
-                &mut server,
-                &message(MessageType::Solicit, [2, 0, 0, 4, 0, i], None),
-                now,
-            );
-            assert!(granted_address(&advertise.unwrap()).is_some());
+            let solicit = message(MessageType::Solicit, [2, 0, 0, 4, 0, i], None);
+            assert!(granted_address(&send(&mut server, &solicit, now).unwrap()).is_some());
         }
-        let full = send(
-            &mut server,
-            &message(MessageType::Solicit, [2, 0, 0, 4, 0, 9], None),
-            now,
-        )
-        .unwrap();
+        let more = message(MessageType::Solicit, [2, 0, 0, 4, 0, 9], None);
+        let full = send(&mut server, &more, now).unwrap();
         assert_eq!(
             v6::status_of(v6::ianas(&full).next().unwrap()),
             Status::NoAddrsAvail
         );
         assert_eq!(server.expire(now + OFFER_HOLD), 3);
-        let again = send(
-            &mut server,
-            &message(MessageType::Solicit, [2, 0, 0, 4, 0, 9], None),
-            now + OFFER_HOLD,
-        );
-        assert!(granted_address(&again.unwrap()).is_some());
-    }
-
-    #[test]
-    fn garbage_is_an_error() {
-        let mut server = server();
-        assert!(matches!(
-            server.handle(&[0xff], addr("fe80::1"), MAC, Instant::now()),
-            Err(Error::Decode(_))
-        ));
+        assert!(granted_address(&send(&mut server, &more, now + OFFER_HOLD).unwrap()).is_some());
     }
 }

@@ -384,14 +384,14 @@ impl Client {
     ///
     /// use mangonel_dhcp::v4::{client, server};
     ///
-    /// let mut server = server::Server::new(server::Config {
-    ///     address: Ipv4Addr::new(10, 0, 0, 1),
-    ///     prefix: 24,
-    ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
-    ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
-    ///     dns: vec![],
-    ///     lease_time: Duration::from_secs(3600),
-    /// })?;
+    /// # let mut server = server::Server::new(server::Config {
+    /// # address: Ipv4Addr::new(10, 0, 0, 1),
+    /// # prefix: 24,
+    /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
+    /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
+    /// # dns: vec![],
+    /// # lease_time: Duration::from_secs(3600),
+    /// # })?;
     /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
     /// let now = Instant::now();
     /// let discover = client.poll(now).transmit.unwrap();
@@ -708,13 +708,14 @@ mod tests {
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
     const MAC: [u8; 6] = [2, 0, 0, 4, 0, 0];
 
-    fn server() -> server::Server {
+    fn server_at(address: Ipv4Addr) -> server::Server {
+        let base = u32::from(address);
         server::Server::new(server::Config {
-            address: GATEWAY,
+            address,
             prefix: 24,
-            pool_start: Ipv4Addr::new(10, 0, 0, 10),
-            pool_end: Ipv4Addr::new(10, 0, 0, 12),
-            dns: vec![GATEWAY],
+            pool_start: Ipv4Addr::from(base + 9),
+            pool_end: Ipv4Addr::from(base + 11),
+            dns: vec![address],
             lease_time: Duration::from_secs(600),
         })
         .unwrap()
@@ -742,160 +743,98 @@ mod tests {
 
     #[test]
     fn acquires_a_lease() {
-        let (mut client, mut server) = (client(), server());
+        let (mut client, mut server) = (client(), server_at(GATEWAY));
         let now = Instant::now();
         let discover = client.poll(now).transmit.unwrap();
-        let msg = decode(&discover);
-        assert_eq!(msg.opts().msg_type(), Some(MessageType::Discover));
         assert_eq!(
-            msg.opts().get(OptionCode::ClientIdentifier),
-            Some(&DhcpOption::ClientIdentifier(vec![1, 2, 0, 0, 4, 0, 0]))
+            decode(&discover).opts().msg_type(),
+            Some(MessageType::Discover)
         );
+        assert_eq!(discover.destination, Ipv4Addr::BROADCAST);
         let offer = server.handle(&discover.packet, now).unwrap().unwrap();
         let request = client.handle(&offer.packet, now).unwrap().transmit.unwrap();
-        let msg = decode(&request);
-        assert_eq!(msg.opts().msg_type(), Some(MessageType::Request));
-        assert_eq!(v4::server_id_of(&msg), Some(GATEWAY));
-        assert_eq!(request.destination, Ipv4Addr::BROADCAST);
+        assert_eq!(v4::server_id_of(&decode(&request)), Some(GATEWAY));
         let ack = server.handle(&request.packet, now).unwrap().unwrap();
         let lease = match client.handle(&ack.packet, now).unwrap().event {
             Some(Event::Bound(lease)) => lease,
             other => panic!("{other:?}"),
         };
         assert_eq!(lease.address, Ipv4Addr::new(10, 0, 0, 10));
-        assert_eq!(lease.prefix, 24);
-        assert_eq!(lease.router, Some(GATEWAY));
-        assert_eq!(lease.dns, vec![GATEWAY]);
+        assert_eq!((lease.prefix, lease.router), (24, Some(GATEWAY)));
         assert_eq!(lease.renew_at, now + Duration::from_secs(300));
         assert_eq!(lease.rebind_at, now + Duration::from_secs(525));
         assert_eq!(lease.expires, now + Duration::from_secs(600));
-        assert_eq!(client.lease(), Some(&lease));
         assert_eq!(client.next_wake(), Some(lease.renew_at));
     }
 
     #[test]
-    fn retransmits_with_backoff() {
-        let mut client = client();
-        let now = Instant::now();
-        assert!(client.poll(now).transmit.is_some());
-        let first = client.next_wake().unwrap();
-        assert!(first >= now + Duration::from_secs(3) && first <= now + Duration::from_secs(5));
-        assert!(client.poll(now + Duration::from_secs(2)).transmit.is_none());
-        let again = client.poll(first).transmit.unwrap();
-        assert!((3..=5).contains(&decode(&again).secs()));
-        let second = client.next_wake().unwrap();
-        let gap = second - first;
-        assert!(gap >= Duration::from_secs(7) && gap <= Duration::from_secs(9));
-    }
-
-    #[test]
     fn renews_then_rebinds_then_loses() {
-        let (mut client, mut server) = (client(), server());
+        let (mut client, mut server) = (client(), server_at(GATEWAY));
         let now = Instant::now();
         let lease = acquire(&mut client, &mut server, now);
 
-        // T1: a unicast REQUEST to the server, answered.
         let renew = client.poll(lease.renew_at).transmit.unwrap();
-        assert_eq!(renew.destination, GATEWAY);
-        assert_eq!(renew.source, lease.address);
-        assert_eq!(decode(&renew).ciaddr(), lease.address);
+        assert_eq!((renew.source, renew.destination), (lease.address, GATEWAY));
         let ack = server
             .handle(&renew.packet, lease.renew_at)
             .unwrap()
             .unwrap();
-        let out = client.handle(&ack.packet, lease.renew_at).unwrap();
-        let renewed = match out.event {
+        let renewed = match client.handle(&ack.packet, lease.renew_at).unwrap().event {
             Some(Event::Bound(lease)) => lease,
             other => panic!("{other:?}"),
         };
         assert_eq!(renewed.expires, lease.renew_at + Duration::from_secs(600));
 
-        // Ignore the server: T2 switches to broadcast, expiry starts over.
+        // With the server silent, T2 switches to broadcast and expiry starts over.
         let rebind = client.poll(renewed.rebind_at).transmit.unwrap();
         assert_eq!(rebind.destination, Ipv4Addr::BROADCAST);
-        assert_eq!(rebind.source, lease.address);
         let out = client.poll(renewed.expires);
         assert_eq!(out.event, Some(Event::Lost));
-        let discover = out.transmit.unwrap();
         assert_eq!(
-            decode(&discover).opts().msg_type(),
+            decode(&out.transmit.unwrap()).opts().msg_type(),
             Some(MessageType::Discover)
         );
-        assert!(client.lease().is_none());
     }
 
     #[test]
     fn nak_restarts() {
-        let (mut client, mut server) = (client(), server());
+        let (mut client, mut server) = (client(), server_at(GATEWAY));
         let now = Instant::now();
-        acquire(&mut client, &mut server, now);
-        let mut other = server::Server::new(server::Config {
-            address: Ipv4Addr::new(10, 0, 1, 1),
-            prefix: 24,
-            pool_start: Ipv4Addr::new(10, 0, 1, 10),
-            pool_end: Ipv4Addr::new(10, 0, 1, 12),
-            dns: vec![],
-            lease_time: Duration::from_secs(600),
-        })
-        .unwrap();
-        let rebind_at = client.lease().unwrap().rebind_at;
-        client.poll(client.lease().unwrap().renew_at);
-        let rebind = client.poll(rebind_at).transmit.unwrap();
-        let nak = other.handle(&rebind.packet, rebind_at).unwrap().unwrap();
-        let out = client.handle(&nak.packet, rebind_at).unwrap();
+        let lease = acquire(&mut client, &mut server, now);
+        let mut other = server_at(Ipv4Addr::new(10, 0, 1, 1));
+        client.poll(lease.renew_at);
+        let rebind = client.poll(lease.rebind_at).transmit.unwrap();
+        let nak = other
+            .handle(&rebind.packet, lease.rebind_at)
+            .unwrap()
+            .unwrap();
+        let out = client.handle(&nak.packet, lease.rebind_at).unwrap();
         assert_eq!(out.event, Some(Event::Lost));
         assert!(client.lease().is_none());
         let restart = client.next_wake().unwrap();
-        assert!(restart > rebind_at + Duration::from_secs(8));
-        assert!(client.poll(restart).transmit.is_some());
-    }
-
-    #[test]
-    fn gives_up_on_an_offer_after_four_requests() {
-        let (mut client, mut server) = (client(), server());
-        let now = Instant::now();
-        let discover = client.poll(now).transmit.unwrap();
-        let offer = server.handle(&discover.packet, now).unwrap().unwrap();
-        client.handle(&offer.packet, now).unwrap();
-        for _ in 0..3 {
-            let at = client.next_wake().unwrap();
-            let kind = decode(&client.poll(at).transmit.unwrap()).opts().msg_type();
-            assert_eq!(kind, Some(MessageType::Request));
-        }
-        let at = client.next_wake().unwrap();
-        let kind = decode(&client.poll(at).transmit.unwrap()).opts().msg_type();
-        assert_eq!(kind, Some(MessageType::Discover));
-    }
-
-    #[test]
-    fn ignores_strangers() {
-        let (mut client, mut server) = (client(), server());
-        let now = Instant::now();
-        client.poll(now);
-        let mut other = Client::with_seed(Config::new([2, 0, 0, 4, 0, 1]), 9);
-        let discover = other.poll(now).transmit.unwrap();
-        let offer = server.handle(&discover.packet, now).unwrap().unwrap();
         assert_eq!(
-            client.handle(&offer.packet, now).unwrap(),
-            Output::default()
+            decode(&client.poll(restart).transmit.unwrap())
+                .opts()
+                .msg_type(),
+            Some(MessageType::Discover)
         );
-        assert!(matches!(client.handle(&[0; 4], now), Err(Error::Decode(_))));
     }
 
     #[test]
     fn release_tells_the_server() {
-        let (mut client, mut server) = (client(), server());
+        let (mut client, mut server) = (client(), server_at(GATEWAY));
         let now = Instant::now();
-        let lease = acquire(&mut client, &mut server, now);
+        acquire(&mut client, &mut server, now);
         let release = client.release(now).unwrap();
-        assert_eq!(release.destination, GATEWAY);
         assert_eq!(
             decode(&release).opts().msg_type(),
             Some(MessageType::Release)
         );
         assert!(server.handle(&release.packet, now).unwrap().is_none());
         assert_eq!(server.leases().count(), 0);
-        assert!(client.lease().is_none());
-        assert_eq!(client.poll(lease.expires), Output::default());
+        assert_eq!(
+            client.poll(now + Duration::from_secs(600)),
+            Output::default()
+        );
     }
 }

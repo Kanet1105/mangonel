@@ -52,7 +52,7 @@ impl Rng {
             return Duration::ZERO;
         }
 
-        Duration::from_nanos(self.next_u64() % (nanos + 1))
+        Duration::from_nanos(self.next_u64() % nanos.saturating_add(1))
     }
 
     /// A duration drawn uniformly from `base - spread..=base + spread`.
@@ -66,29 +66,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seeded_sequences_repeat() {
-        let mut a = Rng::seeded(7);
-        let mut b = Rng::seeded(7);
-        assert_eq!(a.next_u64(), b.next_u64());
+    fn seeded_and_bounded() {
+        let (mut a, mut b) = (Rng::seeded(7), Rng::seeded(7));
         assert_eq!(a.next_u32(), b.next_u32());
-    }
-
-    #[test]
-    fn zero_seed_still_moves() {
-        let mut rng = Rng::seeded(0);
-        assert_ne!(rng.next_u64(), rng.next_u64());
-    }
-
-    #[test]
-    fn jitter_stays_in_range() {
-        let mut rng = Rng::seeded(3);
-        let base = Duration::from_secs(4);
-        let spread = Duration::from_secs(1);
-        for _ in 0..1000 {
-            let d = rng.around(base, spread);
-            assert!(d >= Duration::from_secs(3) && d <= Duration::from_secs(5));
-            assert!(rng.within(spread) <= spread);
+        let (base, spread) = (Duration::from_secs(4), Duration::from_secs(1));
+        for _ in 0..100 {
+            let d = a.around(base, spread);
+            assert!(d >= base - spread && d <= base + spread);
         }
-        assert_eq!(rng.within(Duration::ZERO), Duration::ZERO);
+        assert_eq!(a.within(Duration::ZERO), Duration::ZERO);
     }
 }

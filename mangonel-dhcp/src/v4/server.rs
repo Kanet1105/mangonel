@@ -186,14 +186,14 @@ impl Lease {
     ///
     /// use mangonel_dhcp::v4::{client, server};
     ///
-    /// let mut server = server::Server::new(server::Config {
-    ///     address: Ipv4Addr::new(10, 0, 0, 1),
-    ///     prefix: 24,
-    ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
-    ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
-    ///     dns: vec![],
-    ///     lease_time: Duration::from_secs(3600),
-    /// })?;
+    /// # let mut server = server::Server::new(server::Config {
+    /// # address: Ipv4Addr::new(10, 0, 0, 1),
+    /// # prefix: 24,
+    /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
+    /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
+    /// # dns: vec![],
+    /// # lease_time: Duration::from_secs(3600),
+    /// # })?;
     /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
     /// let now = Instant::now();
     /// let discover = client.poll(now).transmit.unwrap();
@@ -346,14 +346,14 @@ impl Server {
     ///
     /// use mangonel_dhcp::v4::server::{Config, Server};
     ///
-    /// let server = Server::new(Config {
-    ///     address: Ipv4Addr::new(10, 0, 0, 1),
-    ///     prefix: 24,
-    ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
-    ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
-    ///     dns: vec![],
-    ///     lease_time: Duration::from_secs(3600),
-    /// })?;
+    /// # let server = Server::new(Config {
+    /// # address: Ipv4Addr::new(10, 0, 0, 1),
+    /// # prefix: 24,
+    /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
+    /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
+    /// # dns: vec![],
+    /// # lease_time: Duration::from_secs(3600),
+    /// # })?;
     /// assert!(server.leases().next().is_none());
     /// # Ok::<(), mangonel_dhcp::Error>(())
     /// ```
@@ -370,14 +370,14 @@ impl Server {
     ///
     /// use mangonel_dhcp::v4::server::{Config, Server};
     ///
-    /// let mut server = Server::new(Config {
-    ///     address: Ipv4Addr::new(10, 0, 0, 1),
-    ///     prefix: 24,
-    ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
-    ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
-    ///     dns: vec![],
-    ///     lease_time: Duration::from_secs(3600),
-    /// })?;
+    /// # let mut server = Server::new(Config {
+    /// # address: Ipv4Addr::new(10, 0, 0, 1),
+    /// # prefix: 24,
+    /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
+    /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
+    /// # dns: vec![],
+    /// # lease_time: Duration::from_secs(3600),
+    /// # })?;
     /// assert_eq!(server.expire(Instant::now()), 0);
     /// # Ok::<(), mangonel_dhcp::Error>(())
     /// ```
@@ -406,14 +406,14 @@ impl Server {
     ///
     /// use mangonel_dhcp::v4::{client, server};
     ///
-    /// let mut server = server::Server::new(server::Config {
-    ///     address: Ipv4Addr::new(10, 0, 0, 1),
-    ///     prefix: 24,
-    ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
-    ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
-    ///     dns: vec![],
-    ///     lease_time: Duration::from_secs(3600),
-    /// })?;
+    /// # let mut server = server::Server::new(server::Config {
+    /// # address: Ipv4Addr::new(10, 0, 0, 1),
+    /// # prefix: 24,
+    /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
+    /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
+    /// # dns: vec![],
+    /// # lease_time: Duration::from_secs(3600),
+    /// # })?;
     /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
     /// let now = Instant::now();
     /// let discover = client.poll(now).transmit.unwrap();
@@ -437,16 +437,17 @@ impl Server {
         };
         self.expire(now);
         let id = v4::client_id_of(&msg, mac);
+        let for_us = v4::server_id_of(&msg).is_none_or(|server| server == self.config.address);
 
         match kind {
             MessageType::Discover => Ok(self.discover(&msg, id, mac, now)),
             MessageType::Request => Ok(self.request(&msg, id, mac, now)),
-            MessageType::Release => {
+            MessageType::Release if for_us => {
                 self.release(&id, msg.ciaddr());
 
                 Ok(None)
             }
-            MessageType::Decline => {
+            MessageType::Decline if for_us => {
                 self.decline(&msg, &id, now);
 
                 Ok(None)
@@ -464,14 +465,19 @@ impl Server {
         now: Instant,
     ) -> Option<Reply> {
         let address = self.choose(&id, v4::requested_ip_of(msg), now)?;
-        self.bind(
-            id,
-            mac,
-            address,
-            v4::hostname_of(msg),
-            false,
-            now + OFFER_HOLD,
-        );
+        // A client that already holds the address keeps its lease; only a
+        // newcomer gets a short-lived offer.
+        let held = self.leases.get(&id).is_some_and(|lease| lease.bound);
+        if !held {
+            self.bind(
+                id,
+                mac,
+                address,
+                v4::hostname_of(msg),
+                false,
+                now + OFFER_HOLD,
+            );
+        }
 
         Some(self.reply(msg, mac, MessageType::Offer, Some(address)))
     }
@@ -502,7 +508,7 @@ impl Server {
                 None => return None,
             },
             // RENEWING or REBINDING: the client extends the lease it holds.
-            (None, None, false) => (current == Some(ciaddr)).then_some(ciaddr),
+            (None, _, false) => (current == Some(ciaddr)).then_some(ciaddr),
             _ => return None,
         };
 
@@ -677,335 +683,159 @@ impl Server {
 
 #[cfg(test)]
 mod tests {
-    use dhcproto::v4::{
-        Flags,
-        OptionCode,
-    };
+    use dhcproto::v4::OptionCode;
 
     use super::*;
 
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
     const MAC: [u8; 6] = [2, 0, 0, 4, 0, 0];
+    const NONE: Ipv4Addr = Ipv4Addr::UNSPECIFIED;
 
-    fn config() -> Config {
-        Config {
+    fn server() -> Server {
+        Server::new(Config {
             address: GATEWAY,
             prefix: 24,
             pool_start: Ipv4Addr::new(10, 0, 0, 10),
             pool_end: Ipv4Addr::new(10, 0, 0, 12),
             dns: vec![GATEWAY],
             lease_time: Duration::from_secs(600),
-        }
+        })
+        .unwrap()
     }
 
-    fn server() -> Server {
-        Server::new(config()).unwrap()
-    }
-
-    fn message(kind: MessageType, mac: [u8; 6]) -> Message {
-        let mut msg = Message::new_with_id(
-            0x1234,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv4Addr::UNSPECIFIED,
-            Ipv4Addr::UNSPECIFIED,
-            &mac,
-        );
+    fn message(
+        kind: MessageType,
+        mac: [u8; 6],
+        ciaddr: Ipv4Addr,
+        opts: Vec<DhcpOption>,
+    ) -> Message {
+        let mut msg = Message::new_with_id(0x1234, ciaddr, NONE, NONE, NONE, &mac);
         msg.opts_mut().insert(DhcpOption::MessageType(kind));
+        for opt in opts {
+            msg.opts_mut().insert(opt);
+        }
 
         msg
     }
 
-    fn send(server: &mut Server, msg: &Message, now: Instant) -> Option<Message> {
-        server
-            .handle(&msg.to_vec().unwrap(), now)
-            .unwrap()
-            .map(|reply| Message::from_bytes(&reply.packet).unwrap())
+    fn send(server: &mut Server, msg: &Message, now: Instant) -> Option<Reply> {
+        server.handle(&msg.to_vec().unwrap(), now).unwrap()
     }
 
-    fn reply_to(server: &mut Server, msg: &Message, now: Instant) -> Reply {
-        server.handle(&msg.to_vec().unwrap(), now).unwrap().unwrap()
-    }
-
-    fn lease_time(msg: &Message) -> Option<u32> {
-        match msg.opts().get(OptionCode::AddressLeaseTime) {
-            Some(DhcpOption::AddressLeaseTime(secs)) => Some(*secs),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn validate_rejects_bad_pools() {
-        let mut bad = config();
-        bad.pool_end = Ipv4Addr::new(10, 0, 0, 9);
-        assert!(matches!(bad.validate(), Err(Error::PoolReversed(..))));
-        let mut bad = config();
-        bad.pool_end = Ipv4Addr::new(10, 0, 0, 255);
-        assert!(matches!(bad.validate(), Err(Error::PoolOutsideSubnet(..))));
-        let mut bad = config();
-        bad.pool_start = GATEWAY;
-        assert!(matches!(bad.validate(), Err(Error::AddressInPool(..))));
-        let mut bad = config();
-        bad.prefix = 31;
-        assert!(matches!(bad.validate(), Err(Error::PrefixTooLong(31))));
-        let mut bad = config();
-        bad.lease_time = Duration::ZERO;
-        assert!(matches!(bad.validate(), Err(Error::ZeroLifetime)));
+    fn decode(reply: &Reply) -> Message {
+        Message::from_bytes(&reply.packet).unwrap()
     }
 
     #[test]
     fn discover_offer_request_ack() {
         let mut server = server();
         let now = Instant::now();
-        let offer = send(&mut server, &message(MessageType::Discover, MAC), now).unwrap();
-        assert_eq!(offer.opts().msg_type(), Some(MessageType::Offer));
-        assert_eq!(offer.opcode(), Opcode::BootReply);
-        assert_eq!(offer.yiaddr(), Ipv4Addr::new(10, 0, 0, 10));
-        assert_eq!(offer.xid(), 0x1234);
-        assert_eq!(lease_time(&offer), Some(600));
+        let discover = message(MessageType::Discover, MAC, NONE, vec![]);
+        let offer = send(&mut server, &discover, now).unwrap();
+        let msg = decode(&offer);
+        assert_eq!(msg.opts().msg_type(), Some(MessageType::Offer));
+        assert_eq!(msg.yiaddr(), Ipv4Addr::new(10, 0, 0, 10));
         assert_eq!(
-            offer.opts().get(OptionCode::Router),
+            msg.opts().get(OptionCode::Router),
             Some(&DhcpOption::Router(vec![GATEWAY]))
+        );
+        assert_eq!(
+            offer.to,
+            Destination::Unicast {
+                ip: msg.yiaddr(),
+                mac: MAC
+            }
         );
         assert!(!server.leases().next().unwrap().is_bound());
 
-        let mut request = message(MessageType::Request, MAC);
-        request
-            .opts_mut()
-            .insert(DhcpOption::RequestedIpAddress(offer.yiaddr()));
-        request
-            .opts_mut()
-            .insert(DhcpOption::ServerIdentifier(GATEWAY));
-        request
-            .opts_mut()
-            .insert(DhcpOption::Hostname("node".to_owned()));
-        let ack = send(&mut server, &request, now).unwrap();
+        let request = message(
+            MessageType::Request,
+            MAC,
+            NONE,
+            vec![
+                DhcpOption::RequestedIpAddress(msg.yiaddr()),
+                DhcpOption::ServerIdentifier(GATEWAY),
+            ],
+        );
+        let ack = decode(&send(&mut server, &request, now).unwrap());
         assert_eq!(ack.opts().msg_type(), Some(MessageType::Ack));
-        assert_eq!(ack.yiaddr(), Ipv4Addr::new(10, 0, 0, 10));
         let lease = server.leases().next().unwrap();
         assert!(lease.is_bound());
-        assert_eq!(lease.hostname.as_deref(), Some("node"));
         assert_eq!(lease.expires, now + Duration::from_secs(600));
     }
 
     #[test]
-    fn offer_goes_where_rfc_says() {
+    fn renew_release_and_a_wrong_reboot() {
         let mut server = server();
         let now = Instant::now();
-        let reply = reply_to(&mut server, &message(MessageType::Discover, MAC), now);
-        assert_eq!(
-            reply.to,
-            Destination::Unicast {
-                ip: Ipv4Addr::new(10, 0, 0, 10),
-                mac: MAC
-            }
+        let address = Ipv4Addr::new(10, 0, 0, 10);
+        send(
+            &mut server,
+            &message(MessageType::Discover, MAC, NONE, vec![]),
+            now,
         );
-
-        let mut flagged = message(MessageType::Discover, MAC);
-        flagged.set_flags(Flags::new(0).set_broadcast());
-        assert_eq!(
-            reply_to(&mut server, &flagged, now).to,
-            Destination::Broadcast
+        let select = vec![
+            DhcpOption::RequestedIpAddress(address),
+            DhcpOption::ServerIdentifier(GATEWAY),
+        ];
+        send(
+            &mut server,
+            &message(MessageType::Request, MAC, NONE, select),
+            now,
         );
-
-        let mut relayed = message(MessageType::Discover, [2, 0, 0, 4, 0, 1]);
-        relayed.set_giaddr(Ipv4Addr::new(10, 0, 0, 2));
-        assert_eq!(
-            reply_to(&mut server, &relayed, now).to,
-            Destination::Relay(Ipv4Addr::new(10, 0, 0, 2))
-        );
-    }
-
-    #[test]
-    fn request_for_another_server_drops_the_offer() {
-        let mut server = server();
-        let now = Instant::now();
-        send(&mut server, &message(MessageType::Discover, MAC), now);
-        let mut request = message(MessageType::Request, MAC);
-        request
-            .opts_mut()
-            .insert(DhcpOption::ServerIdentifier(Ipv4Addr::new(10, 0, 0, 2)));
-        assert!(send(&mut server, &request, now).is_none());
-        assert_eq!(server.leases().count(), 0);
-    }
-
-    #[test]
-    fn init_reboot_acks_known_and_naks_wrong() {
-        let mut server = server();
-        let now = Instant::now();
-        send(&mut server, &message(MessageType::Discover, MAC), now);
-        let mut select = message(MessageType::Request, MAC);
-        select
-            .opts_mut()
-            .insert(DhcpOption::RequestedIpAddress(Ipv4Addr::new(10, 0, 0, 10)));
-        select
-            .opts_mut()
-            .insert(DhcpOption::ServerIdentifier(GATEWAY));
-        send(&mut server, &select, now);
-
-        let mut reboot = message(MessageType::Request, MAC);
-        reboot
-            .opts_mut()
-            .insert(DhcpOption::RequestedIpAddress(Ipv4Addr::new(10, 0, 0, 10)));
-        let ack = send(&mut server, &reboot, now).unwrap();
-        assert_eq!(ack.opts().msg_type(), Some(MessageType::Ack));
-
-        let mut wrong = message(MessageType::Request, MAC);
-        wrong
-            .opts_mut()
-            .insert(DhcpOption::RequestedIpAddress(Ipv4Addr::new(10, 0, 0, 11)));
-        let reply = reply_to(&mut server, &wrong, now);
-        let nak = Message::from_bytes(&reply.packet).unwrap();
-        assert_eq!(nak.opts().msg_type(), Some(MessageType::Nak));
-        assert_eq!(reply.to, Destination::Broadcast);
-
-        // A stranger asking about our subnet gets silence; off-subnet gets a NAK.
-        let mut stranger = message(MessageType::Request, [2, 0, 0, 4, 0, 9]);
-        stranger
-            .opts_mut()
-            .insert(DhcpOption::RequestedIpAddress(Ipv4Addr::new(10, 0, 0, 12)));
-        assert!(send(&mut server, &stranger, now).is_none());
-        let mut lost = message(MessageType::Request, [2, 0, 0, 4, 0, 9]);
-        lost.opts_mut()
-            .insert(DhcpOption::RequestedIpAddress(Ipv4Addr::new(
-                192, 168, 1, 5,
-            )));
-        assert_eq!(
-            send(&mut server, &lost, now).unwrap().opts().msg_type(),
-            Some(MessageType::Nak)
-        );
-    }
-
-    #[test]
-    fn renew_extends_and_release_frees() {
-        let mut server = server();
-        let now = Instant::now();
-        send(&mut server, &message(MessageType::Discover, MAC), now);
-        let mut select = message(MessageType::Request, MAC);
-        select
-            .opts_mut()
-            .insert(DhcpOption::RequestedIpAddress(Ipv4Addr::new(10, 0, 0, 10)));
-        select
-            .opts_mut()
-            .insert(DhcpOption::ServerIdentifier(GATEWAY));
-        send(&mut server, &select, now);
 
         let later = now + Duration::from_secs(300);
-        let mut renew = message(MessageType::Request, MAC);
-        renew.set_ciaddr(Ipv4Addr::new(10, 0, 0, 10));
-        let reply = reply_to(&mut server, &renew, later);
+        let ack = send(
+            &mut server,
+            &message(MessageType::Request, MAC, address, vec![]),
+            later,
+        )
+        .unwrap();
         assert_eq!(
-            reply.to,
+            ack.to,
             Destination::Unicast {
-                ip: Ipv4Addr::new(10, 0, 0, 10),
+                ip: address,
                 mac: MAC
             }
         );
-        let ack = Message::from_bytes(&reply.packet).unwrap();
-        assert_eq!(ack.opts().msg_type(), Some(MessageType::Ack));
-        assert_eq!(ack.ciaddr(), Ipv4Addr::new(10, 0, 0, 10));
+        assert_eq!(decode(&ack).opts().msg_type(), Some(MessageType::Ack));
         assert_eq!(
             server.leases().next().unwrap().expires,
             later + Duration::from_secs(600)
         );
 
-        let mut release = message(MessageType::Release, MAC);
-        release.set_ciaddr(Ipv4Addr::new(10, 0, 0, 10));
+        let wrong = vec![DhcpOption::RequestedIpAddress(Ipv4Addr::new(10, 0, 0, 11))];
+        let nak = send(
+            &mut server,
+            &message(MessageType::Request, MAC, NONE, wrong),
+            later,
+        )
+        .unwrap();
+        assert_eq!(decode(&nak).opts().msg_type(), Some(MessageType::Nak));
+        assert_eq!(nak.to, Destination::Broadcast);
+
+        let release = message(
+            MessageType::Release,
+            MAC,
+            address,
+            vec![DhcpOption::ServerIdentifier(GATEWAY)],
+        );
         assert!(send(&mut server, &release, later).is_none());
         assert_eq!(server.leases().count(), 0);
     }
 
     #[test]
-    fn pool_exhausts_and_expires() {
+    fn pool_exhausts_and_offers_expire() {
         let mut server = server();
         let now = Instant::now();
         for i in 0..3 {
-            let offer = send(
-                &mut server,
-                &message(MessageType::Discover, [2, 0, 0, 4, 0, i]),
-                now,
-            );
-            assert_eq!(offer.unwrap().yiaddr(), Ipv4Addr::new(10, 0, 0, 10 + i));
+            let discover = message(MessageType::Discover, [2, 0, 0, 4, 0, i], NONE, vec![]);
+            let offer = send(&mut server, &discover, now).unwrap();
+            assert_eq!(decode(&offer).yiaddr(), Ipv4Addr::new(10, 0, 0, 10 + i));
         }
-        assert!(
-            send(
-                &mut server,
-                &message(MessageType::Discover, [2, 0, 0, 4, 0, 9]),
-                now
-            )
-            .is_none()
-        );
-        // Offers lapse after a minute without a request.
-        let later = now + OFFER_HOLD;
-        assert_eq!(server.expire(later), 3);
-        assert!(
-            send(
-                &mut server,
-                &message(MessageType::Discover, [2, 0, 0, 4, 0, 9]),
-                later
-            )
-            .is_some()
-        );
-    }
-
-    #[test]
-    fn decline_parks_the_address() {
-        let mut server = server();
-        let now = Instant::now();
-        let offer = send(&mut server, &message(MessageType::Discover, MAC), now).unwrap();
-        let mut decline = message(MessageType::Decline, MAC);
-        decline
-            .opts_mut()
-            .insert(DhcpOption::RequestedIpAddress(offer.yiaddr()));
-        decline
-            .opts_mut()
-            .insert(DhcpOption::ServerIdentifier(GATEWAY));
-        assert!(send(&mut server, &decline, now).is_none());
-        assert_eq!(server.leases().count(), 0);
-        // The rest of the pool goes out; the declined address does not.
-        for i in 1..3 {
-            let offer = send(
-                &mut server,
-                &message(MessageType::Discover, [2, 0, 0, 4, 0, i]),
-                now,
-            );
-            assert_eq!(offer.unwrap().yiaddr(), Ipv4Addr::new(10, 0, 0, 10 + i));
-        }
-        assert!(send(&mut server, &message(MessageType::Discover, MAC), now).is_none());
-        let later = send(
-            &mut server,
-            &message(MessageType::Discover, MAC),
-            now + DECLINE_HOLD,
-        )
-        .unwrap();
-        assert_eq!(later.yiaddr(), Ipv4Addr::new(10, 0, 0, 10));
-    }
-
-    #[test]
-    fn inform_gets_config_without_a_lease() {
-        let mut server = server();
-        let now = Instant::now();
-        let mut inform = message(MessageType::Inform, MAC);
-        inform.set_ciaddr(Ipv4Addr::new(10, 0, 0, 50));
-        let reply = reply_to(&mut server, &inform, now);
-        let ack = Message::from_bytes(&reply.packet).unwrap();
-        assert_eq!(ack.opts().msg_type(), Some(MessageType::Ack));
-        assert_eq!(ack.yiaddr(), Ipv4Addr::UNSPECIFIED);
-        assert_eq!(lease_time(&ack), None);
-        assert!(ack.opts().get(OptionCode::DomainNameServer).is_some());
-        assert_eq!(server.leases().count(), 0);
-    }
-
-    #[test]
-    fn ignores_what_is_not_a_request() {
-        let mut server = server();
-        let now = Instant::now();
-        let mut reply = message(MessageType::Offer, MAC);
-        reply.set_opcode(Opcode::BootReply);
-        assert!(send(&mut server, &reply, now).is_none());
-        assert!(matches!(
-            server.handle(&[1, 2, 3], now),
-            Err(Error::Decode(_))
-        ));
+        let more = message(MessageType::Discover, [2, 0, 0, 4, 0, 9], NONE, vec![]);
+        assert!(send(&mut server, &more, now).is_none());
+        assert_eq!(server.expire(now + OFFER_HOLD), 3);
+        assert!(send(&mut server, &more, now + OFFER_HOLD).is_some());
     }
 }

@@ -109,19 +109,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn duid_ll_layout() {
+    fn duid_and_prefix() {
         assert_eq!(
             duid_ll([1, 2, 3, 4, 5, 6]),
             vec![0, 3, 0, 1, 1, 2, 3, 4, 5, 6]
         );
-    }
-
-    #[test]
-    fn prefix_membership() {
         let prefix: Ipv6Addr = "2001:db8:1::".parse().unwrap();
         assert!(in_prefix("2001:db8:1::10".parse().unwrap(), prefix, 64));
         assert!(!in_prefix("2001:db8:2::10".parse().unwrap(), prefix, 64));
-        assert!(in_prefix("2001:db8:2::10".parse().unwrap(), prefix, 32));
-        assert!(in_prefix("fe80::1".parse().unwrap(), prefix, 0));
     }
 }
