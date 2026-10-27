@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "mangonel",
     "mangonel-control-plane",
+    "mangonel-dhcp",
     "mangonel-libxdp",
     "mangonel-libxdp-sys",
     "mangonel-nic",
@@ -15,6 +16,7 @@ license = "LGPL-2.1 OR BSD-2-Clause"
 
 [workspace.dependencies]
 mangonel-control-plane = { path = "mangonel-control-plane" }
+mangonel-dhcp = { path = "mangonel-dhcp" }
 mangonel-libxdp = { path = "mangonel-libxdp" }
 mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
 mangonel-nic = { path = "mangonel-nic" }
@@ -25,6 +27,7 @@ mangonel-ring = { path = "mangonel-ring" }
 criterion = { version = "0.8", default-features = false }
 crossbeam-queue = { version = "0.3", default-features = false }
 crossbeam-utils = { version = "0.8", default-features = false }
+dhcproto = { version = "0.15", default-features = false }
 left-right = { version = "0.11", default-features = false }
 libc = { version = "0.2", default-features = false }
 thiserror = { version = "2.0", default-features = false }
