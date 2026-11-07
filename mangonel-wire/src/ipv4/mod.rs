@@ -1,6 +1,12 @@
-//! IPv4 (RFC 791).
+//! IPv4 (RFC 791), with the ICMP and DHCP that ride on it.
+
+pub mod dhcp;
+pub mod icmp;
 
 use std::net::Ipv4Addr;
+
+pub use dhcp::Dhcp;
+pub use icmp::Icmp;
 
 use crate::{
     Error,

@@ -1,5 +1,5 @@
 //! ICMPv6 (RFC 4443); Neighbor Discovery messages are viewed
-//! through [`crate::nd`].
+//! through [`crate::ipv6::nd`].
 
 use std::net::Ipv6Addr;
 
@@ -38,11 +38,11 @@ impl Kind {
 /// ```
 /// use std::net::Ipv6Addr;
 ///
-/// use mangonel_wire::{Icmpv6, icmpv6::Kind};
+/// use mangonel_wire::ipv6::{Icmp, icmp::Kind};
 ///
 /// let (src, dst): (Ipv6Addr, Ipv6Addr) = ("fe80::2".parse()?, "fe80::1".parse()?);
 /// let mut bytes = [0u8; 16];
-/// let mut icmp = Icmpv6::parse(&mut bytes[..])?;
+/// let mut icmp = Icmp::parse(&mut bytes[..])?;
 /// icmp.set_kind(Kind::ECHO_REQUEST);
 /// icmp.set_identifier(0x1234);
 /// icmp.fill_checksum(src, dst);
@@ -50,9 +50,9 @@ impl Kind {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Icmpv6<T>(T);
+pub struct Icmp<T>(T);
 
-impl<T: AsRef<[u8]>> Icmpv6<T> {
+impl<T: AsRef<[u8]>> Icmp<T> {
     /// Views `bytes` as a message; fails if the header is cut
     /// short.
     pub fn parse(bytes: T) -> Result<Self, Error> {
@@ -108,7 +108,7 @@ impl<T: AsRef<[u8]>> Icmpv6<T> {
     }
 }
 
-impl<T: AsRef<[u8]> + AsMut<[u8]>> Icmpv6<T> {
+impl<T: AsRef<[u8]> + AsMut<[u8]>> Icmp<T> {
     pub fn set_kind(&mut self, kind: Kind) {
         self.0.as_mut()[0] = kind.0;
     }
@@ -158,7 +158,7 @@ mod tests {
         let (src, dst): (Ipv6Addr, Ipv6Addr) =
             ("fe80::2".parse().unwrap(), "fe80::1".parse().unwrap());
         let mut bytes = [0u8; 12];
-        let mut icmp = Icmpv6::parse(&mut bytes[..]).unwrap();
+        let mut icmp = Icmp::parse(&mut bytes[..]).unwrap();
         icmp.set_kind(Kind::ECHO_REQUEST);
         icmp.set_identifier(1);
         icmp.set_sequence(2);

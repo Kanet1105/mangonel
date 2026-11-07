@@ -26,10 +26,10 @@ impl Kind {
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::{Icmpv4, icmpv4::Kind};
+/// use mangonel_wire::ipv4::{Icmp, icmp::Kind};
 ///
 /// let mut bytes = [0u8; 16];
-/// let mut icmp = Icmpv4::parse(&mut bytes[..])?;
+/// let mut icmp = Icmp::parse(&mut bytes[..])?;
 /// icmp.set_kind(Kind::ECHO_REQUEST);
 /// icmp.set_identifier(0x1234);
 /// icmp.set_sequence(1);
@@ -38,9 +38,9 @@ impl Kind {
 /// # Ok::<(), mangonel_wire::Error>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Icmpv4<T>(T);
+pub struct Icmp<T>(T);
 
-impl<T: AsRef<[u8]>> Icmpv4<T> {
+impl<T: AsRef<[u8]>> Icmp<T> {
     /// Views `bytes` as a message; fails if the header is cut
     /// short.
     pub fn parse(bytes: T) -> Result<Self, Error> {
@@ -93,7 +93,7 @@ impl<T: AsRef<[u8]>> Icmpv4<T> {
     }
 }
 
-impl<T: AsRef<[u8]> + AsMut<[u8]>> Icmpv4<T> {
+impl<T: AsRef<[u8]> + AsMut<[u8]>> Icmp<T> {
     pub fn set_kind(&mut self, kind: Kind) {
         self.0.as_mut()[0] = kind.0;
     }
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn echo_request_becomes_reply() {
         let mut bytes = [0u8; 12];
-        let mut icmp = Icmpv4::parse(&mut bytes[..]).unwrap();
+        let mut icmp = Icmp::parse(&mut bytes[..]).unwrap();
         icmp.set_kind(Kind::ECHO_REQUEST);
         icmp.set_identifier(0xABCD);
         icmp.set_sequence(9);
@@ -153,7 +153,7 @@ mod tests {
         assert!(icmp.verify_checksum());
         assert_eq!(icmp.rest_of_header(), 0xABCD_0009);
         assert_eq!(
-            Icmpv4::parse(&bytes[..7]).unwrap_err(),
+            Icmp::parse(&bytes[..7]).unwrap_err(),
             Error::Truncated { needed: 8, have: 7 }
         );
     }

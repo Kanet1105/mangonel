@@ -150,6 +150,14 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Udp<T> {
     }
 }
 
+/// The payload with the lifetime of the bytes rather than of
+/// the view.
+pub(crate) fn payload_of(udp: Udp<&[u8]>) -> &[u8] {
+    let end = usize::from(udp.length());
+
+    &udp.into_inner()[HEADER_LEN..end]
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{

@@ -1,6 +1,14 @@
-//! IPv6 (RFC 8200).
+//! IPv6 (RFC 8200), with the ICMP, Neighbor Discovery and
+//! DHCP that ride on it.
+
+pub mod dhcp;
+pub mod icmp;
+pub mod nd;
 
 use std::net::Ipv6Addr;
+
+pub use dhcp::Dhcp;
+pub use icmp::Icmp;
 
 use crate::{
     Error,

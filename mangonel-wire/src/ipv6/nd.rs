@@ -7,7 +7,7 @@ use std::net::Ipv6Addr;
 use crate::{
     Error,
     field,
-    icmpv6::Kind,
+    ipv6::icmp::Kind,
 };
 
 /// An option's type.
@@ -217,7 +217,7 @@ message! {
     /// ```
     /// use std::net::Ipv6Addr;
     ///
-    /// use mangonel_wire::nd::{NeighborSolicitation, OptionKind, link_layer_option};
+    /// use mangonel_wire::ipv6::nd::{NeighborSolicitation, OptionKind, link_layer_option};
     ///
     /// let mut bytes = [0u8; 32];
     /// let mut ns = NeighborSolicitation::init(&mut bytes[..])?;
@@ -295,7 +295,7 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> NeighborAdvertisement<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Icmpv6;
+    use crate::ipv6::Icmp;
 
     fn addr(s: &str) -> Ipv6Addr {
         s.parse().unwrap()
@@ -311,7 +311,7 @@ mod tests {
             OptionKind::SOURCE_LINK_LAYER,
             [2, 0, 0, 4, 0, 0],
         ));
-        Icmpv6::parse(&mut bytes[..])
+        Icmp::parse(&mut bytes[..])
             .unwrap()
             .fill_checksum(asker, addr("ff02::1:ff00:1"));
 
@@ -339,7 +339,7 @@ mod tests {
             OptionKind::TARGET_LINK_LAYER,
             [2, 0, 0, 1, 0, 2],
         ));
-        let mut icmp = Icmpv6::parse(&mut bytes[..]).unwrap();
+        let mut icmp = Icmp::parse(&mut bytes[..]).unwrap();
         icmp.fill_checksum(router, asker);
         assert_eq!(icmp.kind(), Kind::NEIGHBOR_ADVERTISEMENT);
         assert!(icmp.verify_checksum(router, asker));

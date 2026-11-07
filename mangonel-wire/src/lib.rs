@@ -8,8 +8,9 @@
 //! writes; one over `&[u8]` only reads. [`parse`] takes a
 //! whole frame apart into a [`Frame`]; the IP views hand the
 //! transport header on through `payload_mut` or, for IPv6,
-//! [`Ipv6::upper_layer_mut`]. [`Frame::dhcp`] picks out a DHCP
-//! message with what `mangonel-dhcp`'s handler takes with it.
+//! [`Ipv6::upper_layer_mut`]. [`Ipv4::dhcp`] and [`Ipv6::dhcp`]
+//! pick out a DHCP message with what `mangonel-dhcp`'s handler
+//! takes with it.
 //!
 //! # Examples
 //! ```
@@ -71,23 +72,18 @@
 
 pub mod arp;
 pub mod checksum;
-pub mod dhcp;
 mod error;
 pub mod ethernet;
 mod field;
 mod frame;
-pub mod icmpv4;
-pub mod icmpv6;
 pub mod ipv4;
 pub mod ipv6;
-pub mod nd;
 mod protocol;
 pub mod tcp;
 pub mod udp;
 pub mod vlan;
 
 pub use arp::Arp;
-pub use dhcp::Dhcp;
 pub use error::Error;
 pub use ethernet::Ethernet;
 pub use frame::{
@@ -95,8 +91,6 @@ pub use frame::{
     Packet,
     parse,
 };
-pub use icmpv4::Icmpv4;
-pub use icmpv6::Icmpv6;
 pub use ipv4::Ipv4;
 pub use ipv6::Ipv6;
 pub use protocol::Protocol;
