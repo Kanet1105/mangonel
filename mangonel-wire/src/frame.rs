@@ -12,6 +12,39 @@ use crate::{
     vlan,
 };
 
+/// Takes `bytes` apart as a frame; fails if any header the
+/// crate knows is cut short or malformed.
+pub fn parse(bytes: &mut [u8]) -> Result<Frame<'_>, Error> {
+    Ethernet::parse(&bytes[..])?;
+    let (header, mut rest) = bytes.split_at_mut(ethernet::HEADER_LEN);
+    let ethernet = Ethernet::parse(header)?;
+    let mut ethertype = ethernet.ethertype();
+    let mut vlan = None;
+    if ethertype == EtherType::VLAN {
+        Vlan::parse(&rest[..])?;
+        let (tag, after) = rest.split_at_mut(vlan::HEADER_LEN);
+        let tag = Vlan::parse(tag)?;
+        ethertype = tag.ethertype();
+        vlan = Some(tag);
+        rest = after;
+    }
+    let packet = match ethertype {
+        EtherType::ARP => Packet::Arp(Arp::parse(rest)?),
+        EtherType::IPV4 => Packet::Ipv4(Ipv4::parse(rest)?),
+        EtherType::IPV6 => Packet::Ipv6(Ipv6::parse(rest)?),
+        ethertype => Packet::Other {
+            ethertype,
+            payload: rest,
+        },
+    };
+
+    Ok(Frame {
+        ethernet,
+        vlan,
+        packet,
+    })
+}
+
 /// What a frame carries, viewed in place.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Packet<'a> {
@@ -53,39 +86,6 @@ pub struct Frame<'a> {
     ethernet: Ethernet<&'a mut [u8]>,
     vlan: Option<Vlan<&'a mut [u8]>>,
     packet: Packet<'a>,
-}
-
-/// Takes `bytes` apart as a frame; fails if any header the
-/// crate knows is cut short or malformed.
-pub fn parse(bytes: &mut [u8]) -> Result<Frame<'_>, Error> {
-    Ethernet::parse(&bytes[..])?;
-    let (header, mut rest) = bytes.split_at_mut(ethernet::HEADER_LEN);
-    let ethernet = Ethernet::parse(header)?;
-    let mut ethertype = ethernet.ethertype();
-    let mut vlan = None;
-    if ethertype == EtherType::VLAN {
-        Vlan::parse(&rest[..])?;
-        let (tag, after) = rest.split_at_mut(vlan::HEADER_LEN);
-        let tag = Vlan::parse(tag)?;
-        ethertype = tag.ethertype();
-        vlan = Some(tag);
-        rest = after;
-    }
-    let packet = match ethertype {
-        EtherType::ARP => Packet::Arp(Arp::parse(rest)?),
-        EtherType::IPV4 => Packet::Ipv4(Ipv4::parse(rest)?),
-        EtherType::IPV6 => Packet::Ipv6(Ipv6::parse(rest)?),
-        ethertype => Packet::Other {
-            ethertype,
-            payload: rest,
-        },
-    };
-
-    Ok(Frame {
-        ethernet,
-        vlan,
-        packet,
-    })
 }
 
 impl<'a> Frame<'a> {
