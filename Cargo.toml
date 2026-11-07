@@ -8,6 +8,7 @@ members = [
     "mangonel-libxdp-sys",
     "mangonel-nic",
     "mangonel-ring",
+    "mangonel-wire",
 ]
 
 # Matches libxdp, which mangonel links against. See LICENSE.
@@ -21,6 +22,7 @@ mangonel-libxdp = { path = "mangonel-libxdp" }
 mangonel-libxdp-sys = { path = "mangonel-libxdp-sys" }
 mangonel-nic = { path = "mangonel-nic" }
 mangonel-ring = { path = "mangonel-ring" }
+mangonel-wire = { path = "mangonel-wire" }
 
 # default-features = false throughout; each crate turns on the
 # features it needs.
