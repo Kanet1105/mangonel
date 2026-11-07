@@ -1,5 +1,5 @@
 //! ICMPv6 (RFC 4443); Neighbor Discovery messages are viewed
-//! through [`crate::ipv6::ndp`].
+//! through [`crate::network::ipv6::ndp`].
 
 use std::net::Ipv6Addr;
 
@@ -40,7 +40,7 @@ impl Kind {
 /// ```
 /// use std::net::Ipv6Addr;
 ///
-/// use mangonel_wire::ipv6::{Icmp, icmp::Kind};
+/// use mangonel_wire::network::ipv6::{Icmp, icmp::Kind};
 ///
 /// let (src, dst): (Ipv6Addr, Ipv6Addr) = ("fe80::2".parse()?, "fe80::1".parse()?);
 /// let mut bytes = [0u8; 16];

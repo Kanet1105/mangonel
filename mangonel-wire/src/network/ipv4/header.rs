@@ -31,7 +31,7 @@ pub const HEADER_LEN: usize = 20;
 /// ```
 /// use std::net::Ipv4Addr;
 ///
-/// use mangonel_wire::{Ipv4, ipv4::Protocol};
+/// use mangonel_wire::{Ipv4, network::ipv4::Protocol};
 ///
 /// let mut bytes = [0u8; 40];
 /// let mut ip = Ipv4::init(&mut bytes[..])?;

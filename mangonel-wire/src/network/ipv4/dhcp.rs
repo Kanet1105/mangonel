@@ -3,7 +3,7 @@
 
 use crate::{
     Udp,
-    ipv4::{
+    network::ipv4::{
         Ipv4,
         Protocol,
     },
@@ -18,13 +18,13 @@ pub const CLIENT_PORT: u16 = 68;
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::{Packet, ipv4::Dhcp};
+/// use mangonel_wire::{Packet, network::ipv4::Dhcp};
 ///
 /// # let mut data = [0u8; 300];
 /// # data[12..14].copy_from_slice(&[0x08, 0x00]);
 /// # let mut ip = mangonel_wire::Ipv4::init(&mut data[14..])?;
 /// # ip.set_total_length(286)?;
-/// # ip.set_protocol(mangonel_wire::ipv4::Protocol::UDP);
+/// # ip.set_protocol(mangonel_wire::network::ipv4::Protocol::UDP);
 /// # let mut udp = mangonel_wire::Udp::init(ip.payload_mut())?;
 /// # udp.set_length(266)?;
 /// # udp.set_destination_port(67);

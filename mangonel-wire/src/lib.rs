@@ -14,7 +14,7 @@
 //!
 //! # Examples
 //! ```
-//! use mangonel_wire::{Packet, Udp, ipv4::Protocol};
+//! use mangonel_wire::{Packet, Udp, network::ipv4::Protocol};
 //!
 //! # let mut data = [0u8; 60];
 //! # data[12..14].copy_from_slice(&[0x08, 0x00]);
@@ -41,7 +41,7 @@
 //! ```
 //! use std::net::Ipv4Addr;
 //!
-//! use mangonel_wire::{Ethernet, Ipv4, Udp, data_link::ethernet::EtherType, ipv4::Protocol};
+//! use mangonel_wire::{Ethernet, Ipv4, Udp, data_link::ethernet::EtherType, network::ipv4::Protocol};
 //!
 //! let mut frame = [0u8; 64];
 //! let mut eth = Ethernet::parse(&mut frame[..])?;
@@ -75,8 +75,7 @@ pub mod data_link;
 mod error;
 mod field;
 mod frame;
-pub mod ipv4;
-pub mod ipv6;
+pub mod network;
 pub mod transport;
 
 pub use data_link::{
@@ -90,8 +89,10 @@ pub use frame::{
     Packet,
     parse,
 };
-pub use ipv4::Ipv4;
-pub use ipv6::Ipv6;
+pub use network::{
+    Ipv4,
+    Ipv6,
+};
 pub use transport::{
     Tcp,
     Udp,

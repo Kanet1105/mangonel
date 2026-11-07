@@ -26,7 +26,7 @@ impl Kind {
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::ipv4::{Icmp, icmp::Kind};
+/// use mangonel_wire::network::ipv4::{Icmp, icmp::Kind};
 ///
 /// let mut bytes = [0u8; 16];
 /// let mut icmp = Icmp::parse(&mut bytes[..])?;

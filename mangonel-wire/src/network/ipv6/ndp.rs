@@ -7,7 +7,7 @@ use std::net::Ipv6Addr;
 use crate::{
     Error,
     field,
-    ipv6::icmp::Kind,
+    network::ipv6::icmp::Kind,
 };
 
 /// An option's type.
@@ -217,7 +217,7 @@ message! {
     /// ```
     /// use std::net::Ipv6Addr;
     ///
-    /// use mangonel_wire::ipv6::ndp::{NeighborSolicitation, OptionKind, link_layer_option};
+    /// use mangonel_wire::network::ipv6::ndp::{NeighborSolicitation, OptionKind, link_layer_option};
     ///
     /// let mut bytes = [0u8; 32];
     /// let mut ns = NeighborSolicitation::init(&mut bytes[..])?;
@@ -295,7 +295,7 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> NeighborAdvertisement<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipv6::Icmp;
+    use crate::network::ipv6::Icmp;
 
     fn addr(s: &str) -> Ipv6Addr {
         s.parse().unwrap()

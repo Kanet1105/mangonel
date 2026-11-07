@@ -34,7 +34,7 @@ pub const HEADER_LEN: usize = 40;
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::{Ipv6, ipv6::Protocol};
+/// use mangonel_wire::{Ipv6, network::ipv6::Protocol};
 ///
 /// let mut bytes = [0u8; 48];
 /// let mut ip = Ipv6::init(&mut bytes[..])?;
