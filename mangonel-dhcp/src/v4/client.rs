@@ -89,7 +89,7 @@ impl Config {
 ///
 /// # Examples
 /// ```
-/// use std::{net::Ipv4Addr, time::{Duration, Instant}};
+/// use std::{collections::HashMap, net::Ipv4Addr, time::{Duration, Instant}};
 ///
 /// use mangonel_dhcp::v4::{client, server};
 ///
@@ -99,6 +99,7 @@ impl Config {
 ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
 ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
 ///     dns: vec![],
+///     reservations: HashMap::new(),
 ///     lease_time: Duration::from_secs(3600),
 /// })?;
 /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
@@ -380,7 +381,7 @@ impl Client {
     ///
     /// # Examples
     /// ```
-    /// use std::{net::Ipv4Addr, time::{Duration, Instant}};
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::{Duration, Instant}};
     ///
     /// use mangonel_dhcp::v4::{client, server};
     ///
@@ -390,6 +391,7 @@ impl Client {
     /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
     /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # lease_time: Duration::from_secs(3600),
     /// # })?;
     /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
@@ -702,6 +704,8 @@ fn lease_of(msg: &Message, now: Instant) -> Option<Lease> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::v4::server;
 
@@ -716,6 +720,7 @@ mod tests {
             pool_start: Ipv4Addr::from(base + 9),
             pool_end: Ipv4Addr::from(base + 11),
             dns: vec![address],
+            reservations: HashMap::new(),
             lease_time: Duration::from_secs(600),
         })
         .unwrap()

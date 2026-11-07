@@ -2,7 +2,10 @@
 //! pool, handing out non-temporary addresses.
 
 use std::{
-    collections::HashMap,
+    collections::{
+        HashMap,
+        HashSet,
+    },
     net::Ipv6Addr,
     time::{
         Duration,
@@ -44,7 +47,7 @@ const DECLINE_HOLD: Duration = Duration::from_secs(10 * 60);
 ///
 /// # Examples
 /// ```
-/// use std::time::Duration;
+/// use std::{collections::HashMap, time::Duration};
 ///
 /// use mangonel_dhcp::v6::server::Config;
 ///
@@ -55,6 +58,7 @@ const DECLINE_HOLD: Duration = Duration::from_secs(10 * 60);
 ///     pool_start: "2001:db8:1::100".parse()?,
 ///     pool_end: "2001:db8:1::1ff".parse()?,
 ///     dns: vec!["2001:db8:1::1".parse()?],
+///     reservations: HashMap::from([([2, 0, 0, 4, 0, 0], "2001:db8:1::2".parse()?)]),
 ///     preferred_lifetime: Duration::from_secs(1800),
 ///     valid_lifetime: Duration::from_secs(3600),
 ///     rapid_commit: false,
@@ -76,6 +80,9 @@ pub struct Config {
     pub pool_end: Ipv6Addr,
     /// Resolvers advertised to clients; empty advertises none.
     pub dns: Vec<Ipv6Addr>,
+    /// Addresses fixed to a MAC; they may lie outside the pool
+    /// and go to nobody else.
+    pub reservations: HashMap<[u8; 6], Ipv6Addr>,
     /// How long an address stays preferred.
     pub preferred_lifetime: Duration,
     /// How long an address stays valid.
@@ -91,7 +98,7 @@ impl Config {
     ///
     /// # Examples
     /// ```
-    /// use std::time::Duration;
+    /// use std::{collections::HashMap, time::Duration};
     ///
     /// use mangonel_dhcp::{Error, v6::server::Config};
     ///
@@ -102,6 +109,7 @@ impl Config {
     ///     pool_start: "2001:db8:1::100".parse()?,
     ///     pool_end: "2001:db8:1::1ff".parse()?,
     ///     dns: vec![],
+    ///     reservations: HashMap::new(),
     ///     preferred_lifetime: Duration::from_secs(3600),
     ///     valid_lifetime: Duration::from_secs(1800),
     ///     rapid_commit: false,
@@ -124,6 +132,15 @@ impl Config {
                 self.pool_start.into(),
                 self.pool_end.into(),
             ));
+        }
+        let mut reserved = HashSet::with_capacity(self.reservations.len());
+        for &address in self.reservations.values() {
+            if !self.on_link(address) {
+                return Err(Error::ReservedNotHost(address.into()));
+            }
+            if !reserved.insert(address) {
+                return Err(Error::ReservedTwice(address.into()));
+            }
         }
         if self.preferred_lifetime.is_zero() || self.valid_lifetime.is_zero() {
             return Err(Error::ZeroLifetime);
@@ -151,7 +168,7 @@ impl Config {
 ///
 /// # Examples
 /// ```
-/// use std::time::{Duration, Instant};
+/// use std::{collections::HashMap, time::{Duration, Instant}};
 ///
 /// use mangonel_dhcp::v6::{client, server};
 ///
@@ -162,6 +179,7 @@ impl Config {
 ///     pool_start: "2001:db8:1::100".parse()?,
 ///     pool_end: "2001:db8:1::1ff".parse()?,
 ///     dns: vec![],
+///     reservations: HashMap::new(),
 ///     preferred_lifetime: Duration::from_secs(1800),
 ///     valid_lifetime: Duration::from_secs(3600),
 ///     rapid_commit: false,
@@ -196,7 +214,7 @@ impl Lease {
     ///
     /// # Examples
     /// ```
-    /// use std::time::{Duration, Instant};
+    /// use std::{collections::HashMap, time::{Duration, Instant}};
     ///
     /// use mangonel_dhcp::v6::{client, server};
     ///
@@ -207,6 +225,7 @@ impl Lease {
     /// # pool_start: "2001:db8:1::100".parse()?,
     /// # pool_end: "2001:db8:1::1ff".parse()?,
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # preferred_lifetime: Duration::from_secs(1800),
     /// # valid_lifetime: Duration::from_secs(3600),
     /// # rapid_commit: false,
@@ -250,7 +269,7 @@ pub struct Reply {
 ///
 /// # Examples
 /// ```
-/// use std::time::Duration;
+/// use std::{collections::HashMap, time::Duration};
 ///
 /// use mangonel_dhcp::v6::server::{Config, Server};
 ///
@@ -261,6 +280,7 @@ pub struct Reply {
 ///     pool_start: "2001:db8:1::100".parse()?,
 ///     pool_end: "2001:db8:1::1ff".parse()?,
 ///     dns: vec![],
+///     reservations: HashMap::new(),
 ///     preferred_lifetime: Duration::from_secs(1800),
 ///     valid_lifetime: Duration::from_secs(3600),
 ///     rapid_commit: false,
@@ -275,6 +295,8 @@ pub struct Server {
     leases: HashMap<(Vec<u8>, u32), Lease>,
     by_address: HashMap<Ipv6Addr, (Vec<u8>, u32)>,
     declined: HashMap<Ipv6Addr, Instant>,
+    /// Every reserved address, which the scan passes over.
+    reserved: HashSet<Ipv6Addr>,
     /// Where the next pool scan starts, as an offset into the pool.
     cursor: u128,
 }
@@ -285,7 +307,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::time::Duration;
+    /// use std::{collections::HashMap, time::Duration};
     ///
     /// use mangonel_dhcp::v6::server::{Config, Server};
     ///
@@ -296,6 +318,7 @@ impl Server {
     ///     pool_start: "2001:db8:1::100".parse()?,
     ///     pool_end: "2001:db8:1::1ff".parse()?,
     ///     dns: vec![],
+    ///     reservations: HashMap::new(),
     ///     preferred_lifetime: Duration::from_secs(1800),
     ///     valid_lifetime: Duration::from_secs(3600),
     ///     rapid_commit: false,
@@ -306,6 +329,7 @@ impl Server {
     pub fn new(config: Config) -> Result<Self, Error> {
         config.validate()?;
         let server_id = v6::duid_ll(config.mac);
+        let reserved = config.reservations.values().copied().collect();
 
         Ok(Self {
             config,
@@ -313,6 +337,7 @@ impl Server {
             leases: HashMap::new(),
             by_address: HashMap::new(),
             declined: HashMap::new(),
+            reserved,
             cursor: 0,
         })
     }
@@ -321,7 +346,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::time::Duration;
+    /// use std::{collections::HashMap, time::Duration};
     ///
     /// use mangonel_dhcp::v6::server::{Config, Server};
     ///
@@ -332,6 +357,7 @@ impl Server {
     ///     pool_start: "2001:db8:1::100".parse()?,
     ///     pool_end: "2001:db8:1::1ff".parse()?,
     ///     dns: vec![],
+    ///     reservations: HashMap::new(),
     ///     preferred_lifetime: Duration::from_secs(1800),
     ///     valid_lifetime: Duration::from_secs(3600),
     ///     rapid_commit: false,
@@ -348,7 +374,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::time::Duration;
+    /// use std::{collections::HashMap, time::Duration};
     ///
     /// use mangonel_dhcp::v6::server::{Config, Server};
     ///
@@ -359,6 +385,7 @@ impl Server {
     /// # pool_start: "2001:db8:1::100".parse()?,
     /// # pool_end: "2001:db8:1::1ff".parse()?,
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # preferred_lifetime: Duration::from_secs(1800),
     /// # valid_lifetime: Duration::from_secs(3600),
     /// # rapid_commit: false,
@@ -375,7 +402,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::time::Duration;
+    /// use std::{collections::HashMap, time::Duration};
     ///
     /// use mangonel_dhcp::v6::server::{Config, Server};
     ///
@@ -386,6 +413,7 @@ impl Server {
     /// # pool_start: "2001:db8:1::100".parse()?,
     /// # pool_end: "2001:db8:1::1ff".parse()?,
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # preferred_lifetime: Duration::from_secs(1800),
     /// # valid_lifetime: Duration::from_secs(3600),
     /// # rapid_commit: false,
@@ -402,7 +430,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::time::{Duration, Instant};
+    /// use std::{collections::HashMap, time::{Duration, Instant}};
     ///
     /// use mangonel_dhcp::v6::server::{Config, Server};
     ///
@@ -413,6 +441,7 @@ impl Server {
     /// # pool_start: "2001:db8:1::100".parse()?,
     /// # pool_end: "2001:db8:1::1ff".parse()?,
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # preferred_lifetime: Duration::from_secs(1800),
     /// # valid_lifetime: Duration::from_secs(3600),
     /// # rapid_commit: false,
@@ -441,7 +470,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::time::{Duration, Instant};
+    /// use std::{collections::HashMap, time::{Duration, Instant}};
     ///
     /// use dhcproto::{Decodable, v6::{Message, MessageType}};
     /// use mangonel_dhcp::v6::{client, server};
@@ -453,6 +482,7 @@ impl Server {
     /// # pool_start: "2001:db8:1::100".parse()?,
     /// # pool_end: "2001:db8:1::1ff".parse()?,
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # preferred_lifetime: Duration::from_secs(1800),
     /// # valid_lifetime: Duration::from_secs(3600),
     /// # rapid_commit: false,
@@ -512,12 +542,12 @@ impl Server {
                 Some(self.granting(&msg, &id, ias))
             }
             (MessageType::Renew, Some(id)) if ours => {
-                let ias = self.extend(&msg, &id, now, false);
+                let ias = self.extend(&msg, &id, mac, now, false);
 
                 Some(self.granting(&msg, &id, ias))
             }
             (MessageType::Rebind, Some(id)) if server_id.is_none() => {
-                let ias = self.extend(&msg, &id, now, true);
+                let ias = self.extend(&msg, &id, mac, now, true);
 
                 (!ias.is_empty()).then(|| self.granting(&msg, &id, ias))
             }
@@ -578,7 +608,7 @@ impl Server {
         for ia in v6::ianas(msg) {
             let key = (id.to_vec(), ia.id);
             let hint = v6::addresses(ia).next().map(|addr| addr.addr);
-            match self.choose(&key, hint, now) {
+            match self.choose(&key, mac, hint, now) {
                 Some(address) => {
                     // A client that already holds the address keeps its
                     // lease; only a newcomer gets a short-lived offer.
@@ -599,18 +629,31 @@ impl Server {
 
     /// Extends the lease behind every IA_NA in `msg`; what an
     /// unknown IA gets depends on whether this is a Rebind.
-    fn extend(&mut self, msg: &Message, id: &[u8], now: Instant, rebind: bool) -> Vec<IANA> {
+    fn extend(
+        &mut self,
+        msg: &Message,
+        id: &[u8],
+        mac: [u8; 6],
+        now: Instant,
+        rebind: bool,
+    ) -> Vec<IANA> {
         let mut ias = Vec::new();
         for ia in v6::ianas(msg) {
             let key = (id.to_vec(), ia.id);
             let asked: Vec<Ipv6Addr> = v6::addresses(ia).map(|addr| addr.addr).collect();
             let held = self.leases.get(&key).map(|lease| lease.address);
-            match held {
-                Some(address) if asked.is_empty() || asked.contains(&address) => {
+            match (held, self.reserved_for(mac, &key)) {
+                (Some(address), _) if asked.is_empty() || asked.contains(&address) => {
                     if let Some(lease) = self.leases.get_mut(&key) {
                         lease.expires = now + self.config.valid_lifetime;
                         lease.bound = true;
                     }
+                    ias.push(self.granted(ia.id, address));
+                }
+                // A reservation outlives the lease table, so its holder
+                // extends it without a binding on record.
+                (None, Some(address)) if asked.contains(&address) => {
+                    self.bind(key, mac, address, true, now + self.config.valid_lifetime);
                     ias.push(self.granted(ia.id, address));
                 }
                 // RFC 8415 section 18.3.5: an unknown binding gets zero
@@ -651,14 +694,30 @@ impl Server {
         }
     }
 
-    /// The IA's current address, the one it hinted at, or
-    /// the next free one, in that order.
+    /// The address reserved for `mac`, unless another IA of
+    /// the same client already holds it.
+    fn reserved_for(&self, mac: [u8; 6], key: &(Vec<u8>, u32)) -> Option<Ipv6Addr> {
+        let address = *self.config.reservations.get(&mac)?;
+        let sibling = self
+            .by_address
+            .get(&address)
+            .is_some_and(|owner| owner.0 == key.0 && owner.1 != key.1);
+
+        (!sibling).then_some(address)
+    }
+
+    /// The client's reservation, the IA's current address,
+    /// the one it hinted at, or the next free one, in that order.
     fn choose(
         &mut self,
         key: &(Vec<u8>, u32),
+        mac: [u8; 6],
         hint: Option<Ipv6Addr>,
         now: Instant,
     ) -> Option<Ipv6Addr> {
+        if let Some(reserved) = self.reserved_for(mac, key) {
+            return Some(reserved);
+        }
         if let Some(lease) = self.leases.get(key) {
             return Some(lease.address);
         }
@@ -686,6 +745,7 @@ impl Server {
 
     fn is_free(&self, address: Ipv6Addr, now: Instant) -> bool {
         self.config.contains(address)
+            && !self.reserved.contains(&address)
             && !self.by_address.contains_key(&address)
             && self
                 .declined
@@ -816,19 +876,30 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn server() -> Server {
-        Server::new(Config {
+    fn config() -> Config {
+        Config {
             mac: [2, 0, 0, 1, 0, 2],
             prefix: addr("2001:db8:1::"),
             prefix_len: 64,
             pool_start: addr("2001:db8:1::10"),
             pool_end: addr("2001:db8:1::12"),
             dns: vec![addr("2001:db8:1::1")],
+            reservations: HashMap::new(),
             preferred_lifetime: Duration::from_secs(600),
             valid_lifetime: Duration::from_secs(900),
             rapid_commit: false,
-        })
-        .unwrap()
+        }
+    }
+
+    fn config_with(mac: [u8; 6], address: Ipv6Addr) -> Config {
+        let mut config = config();
+        config.reservations.insert(mac, address);
+
+        config
+    }
+
+    fn server() -> Server {
+        Server::new(config()).unwrap()
     }
 
     /// A message of `kind` from `mac` with one IA_NA, and the
@@ -864,8 +935,17 @@ mod tests {
     }
 
     fn send(server: &mut Server, msg: &Message, now: Instant) -> Option<Message> {
+        send_from(server, msg, MAC, now)
+    }
+
+    fn send_from(
+        server: &mut Server,
+        msg: &Message,
+        mac: [u8; 6],
+        now: Instant,
+    ) -> Option<Message> {
         server
-            .handle(&msg.to_vec().unwrap(), addr("fe80::1"), MAC, now)
+            .handle(&msg.to_vec().unwrap(), addr("fe80::1"), mac, now)
             .unwrap()
             .map(|reply| Message::from_bytes(&reply.packet).unwrap())
     }
@@ -963,5 +1043,64 @@ mod tests {
         );
         assert_eq!(server.expire(now + OFFER_HOLD), 3);
         assert!(granted_address(&send(&mut server, &more, now + OFFER_HOLD).unwrap()).is_some());
+    }
+
+    #[test]
+    fn reserved_address_follows_its_mac() {
+        let reserved = addr("2001:db8:1::50");
+        let mut server = Server::new(config_with(MAC, reserved)).unwrap();
+        let now = Instant::now();
+
+        // The holder gets its reservation, whatever it hints at; a stranger
+        // hinting at the reservation is steered elsewhere.
+        let solicit = message(MessageType::Solicit, MAC, Some(addr("2001:db8:1::10")));
+        let advertise = send(&mut server, &solicit, now).unwrap();
+        assert_eq!(granted_address(&advertise), Some(reserved));
+        let stranger = [2, 0, 0, 4, 0, 1];
+        let solicit = message(MessageType::Solicit, stranger, Some(reserved));
+        let advertise = send_from(&mut server, &solicit, stranger, now).unwrap();
+        assert_eq!(granted_address(&advertise), Some(addr("2001:db8:1::10")));
+
+        // The reservation is the record of its holder: a fresh server renews
+        // it without a binding and refuses to renew anything else.
+        let mut fresh = Server::new(config_with(MAC, reserved)).unwrap();
+        let renew = message(MessageType::Renew, MAC, Some(reserved));
+        let reply = send(&mut fresh, &renew, now).unwrap();
+        assert_eq!(granted_address(&reply), Some(reserved));
+        assert!(fresh.leases().next().unwrap().is_bound());
+        let mut fresh = Server::new(config_with(MAC, reserved)).unwrap();
+        let stale = message(MessageType::Renew, MAC, Some(addr("2001:db8:1::11")));
+        let reply = send(&mut fresh, &stale, now).unwrap();
+        assert_eq!(
+            v6::status_of(v6::ianas(&reply).next().unwrap()),
+            Status::NoBinding
+        );
+    }
+
+    #[test]
+    fn reservations_are_checked_and_skipped() {
+        let mut config = config_with(MAC, addr("2001:db8:2::5"));
+        assert!(matches!(config.validate(), Err(Error::ReservedNotHost(_))));
+        config.reservations.insert(MAC, addr("2001:db8:1::11"));
+        config
+            .reservations
+            .insert([2, 0, 0, 4, 0, 1], addr("2001:db8:1::11"));
+        assert!(matches!(config.validate(), Err(Error::ReservedTwice(_))));
+        config.reservations.remove(&[2, 0, 0, 4, 0, 1]);
+
+        // A reservation inside the pool is passed over by the scan.
+        let mut server = Server::new(config).unwrap();
+        let now = Instant::now();
+        let mut offered = Vec::new();
+        for i in 1..4 {
+            let stranger = [2, 0, 0, 4, 0, i];
+            let solicit = message(MessageType::Solicit, stranger, None);
+            let advertise = send_from(&mut server, &solicit, stranger, now).unwrap();
+            offered.extend(granted_address(&advertise));
+        }
+        assert_eq!(
+            offered,
+            vec![addr("2001:db8:1::10"), addr("2001:db8:1::12")]
+        );
     }
 }
