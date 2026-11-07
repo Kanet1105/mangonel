@@ -4,9 +4,11 @@
 use std::net::Ipv6Addr;
 
 use crate::{
-    Ipv6,
-    Protocol,
     Udp,
+    ipv6::{
+        Ipv6,
+        Protocol,
+    },
     udp,
 };
 
@@ -24,7 +26,7 @@ pub const SERVER_PORT: u16 = 547;
 /// # data[12..14].copy_from_slice(&[0x86, 0xDD]);
 /// # let mut ip = mangonel_wire::Ipv6::init(&mut data[14..])?;
 /// # ip.set_payload_length(246)?;
-/// # ip.set_next_header(mangonel_wire::Protocol::UDP);
+/// # ip.set_next_header(mangonel_wire::ipv6::Protocol::UDP);
 /// # let mut udp = mangonel_wire::Udp::init(ip.payload_mut())?;
 /// # udp.set_length(246)?;
 /// # udp.set_destination_port(547);

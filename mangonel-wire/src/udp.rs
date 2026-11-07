@@ -4,10 +4,12 @@ use std::net::IpAddr;
 
 use crate::{
     Error,
-    Protocol,
     checksum,
     field,
 };
+
+/// The IP protocol number, the same in both families.
+pub const PROTOCOL: u8 = 17;
 
 /// The header's length in bytes.
 pub const HEADER_LEN: usize = 8;
@@ -91,7 +93,7 @@ impl<T: AsRef<[u8]>> Udp<T> {
         if self.checksum() == 0 {
             return src.is_ipv4();
         }
-        let pseudo = checksum::pseudo_header(src, dst, Protocol::UDP, self.datagram().len());
+        let pseudo = checksum::pseudo_header(src, dst, PROTOCOL, self.datagram().len());
 
         checksum::finish(pseudo + checksum::sum(self.datagram())) == 0
     }
@@ -135,7 +137,7 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Udp<T> {
     /// datagram and writes it, never as zero.
     pub fn fill_checksum(&mut self, src: IpAddr, dst: IpAddr) {
         self.set_checksum(0);
-        let pseudo = checksum::pseudo_header(src, dst, Protocol::UDP, self.datagram().len());
+        let pseudo = checksum::pseudo_header(src, dst, PROTOCOL, self.datagram().len());
         let sum = match checksum::finish(pseudo + checksum::sum(self.datagram())) {
             0 => 0xFFFF,
             sum => sum,

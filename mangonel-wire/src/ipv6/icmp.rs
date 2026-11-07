@@ -5,10 +5,12 @@ use std::net::Ipv6Addr;
 
 use crate::{
     Error,
-    Protocol,
     checksum,
     field,
 };
+
+/// The IPv6 next-header number.
+pub const PROTOCOL: u8 = 58;
 
 /// The header's length in bytes, the type-specific word
 /// included.
@@ -81,8 +83,7 @@ impl<T: AsRef<[u8]>> Icmp<T> {
     /// Whether the message sums to what its checksum says.
     pub fn verify_checksum(&self, src: Ipv6Addr, dst: Ipv6Addr) -> bool {
         let message = self.0.as_ref();
-        let pseudo =
-            checksum::pseudo_header(src.into(), dst.into(), Protocol::ICMPV6, message.len());
+        let pseudo = checksum::pseudo_header(src.into(), dst.into(), PROTOCOL, message.len());
 
         checksum::finish(pseudo + checksum::sum(message)) == 0
     }
@@ -126,8 +127,7 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Icmp<T> {
     pub fn fill_checksum(&mut self, src: Ipv6Addr, dst: Ipv6Addr) {
         self.set_checksum(0);
         let message = self.0.as_ref();
-        let pseudo =
-            checksum::pseudo_header(src.into(), dst.into(), Protocol::ICMPV6, message.len());
+        let pseudo = checksum::pseudo_header(src.into(), dst.into(), PROTOCOL, message.len());
         let sum = checksum::finish(pseudo + checksum::sum(message));
         self.set_checksum(sum);
     }

@@ -2,9 +2,11 @@
 //! `v4` handlers take alongside the message.
 
 use crate::{
-    Ipv4,
-    Protocol,
     Udp,
+    ipv4::{
+        Ipv4,
+        Protocol,
+    },
     udp,
 };
 
@@ -22,7 +24,7 @@ pub const CLIENT_PORT: u16 = 68;
 /// # data[12..14].copy_from_slice(&[0x08, 0x00]);
 /// # let mut ip = mangonel_wire::Ipv4::init(&mut data[14..])?;
 /// # ip.set_total_length(286)?;
-/// # ip.set_protocol(mangonel_wire::Protocol::UDP);
+/// # ip.set_protocol(mangonel_wire::ipv4::Protocol::UDP);
 /// # let mut udp = mangonel_wire::Udp::init(ip.payload_mut())?;
 /// # udp.set_length(266)?;
 /// # udp.set_destination_port(67);

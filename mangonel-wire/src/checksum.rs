@@ -3,8 +3,6 @@
 
 use std::net::IpAddr;
 
-use crate::Protocol;
-
 /// The 16-bit big-endian words of `data`, the odd byte padded.
 fn words(data: &[u8]) -> impl Iterator<Item = u16> {
     let chunks = data.chunks_exact(2);
@@ -31,7 +29,7 @@ pub fn finish(mut sum: u32) -> u16 {
 }
 
 /// The sum a transport checksum starts from.
-pub fn pseudo_header(src: IpAddr, dst: IpAddr, protocol: Protocol, length: usize) -> u32 {
+pub fn pseudo_header(src: IpAddr, dst: IpAddr, protocol: u8, length: usize) -> u32 {
     let length = u32::try_from(length).expect("a packet is shorter than 4 GiB. This is a bug.");
     let addresses = match (src, dst) {
         (IpAddr::V4(src), IpAddr::V4(dst)) => sum(&src.octets()) + sum(&dst.octets()),
@@ -39,7 +37,7 @@ pub fn pseudo_header(src: IpAddr, dst: IpAddr, protocol: Protocol, length: usize
         _ => panic!("a pseudo-header mixes address families. This is a bug."),
     };
 
-    addresses + (length >> 16) + (length & 0xFFFF) + u32::from(protocol.0)
+    addresses + (length >> 16) + (length & 0xFFFF) + u32::from(protocol)
 }
 
 /// `checksum` after the bytes `old` became `new`.

@@ -14,13 +14,13 @@
 //!
 //! # Examples
 //! ```
-//! use mangonel_wire::{Packet, Protocol, Udp};
+//! use mangonel_wire::{Packet, Udp, ipv4::Protocol};
 //!
 //! # let mut data = [0u8; 60];
 //! # data[12..14].copy_from_slice(&[0x08, 0x00]);
 //! # let mut ip = mangonel_wire::Ipv4::init(&mut data[14..])?;
 //! # ip.set_total_length(28)?;
-//! # ip.set_protocol(mangonel_wire::Protocol::UDP);
+//! # ip.set_protocol(Protocol::UDP);
 //! # mangonel_wire::Udp::init(ip.payload_mut())?;
 //! let mut frame = mangonel_wire::parse(&mut data[..])?;
 //! match frame.packet_mut() {
@@ -41,7 +41,7 @@
 //! ```
 //! use std::net::Ipv4Addr;
 //!
-//! use mangonel_wire::{Ethernet, Ipv4, Protocol, Udp, ethernet::EtherType};
+//! use mangonel_wire::{Ethernet, Ipv4, Udp, ethernet::EtherType, ipv4::Protocol};
 //!
 //! let mut frame = [0u8; 64];
 //! let mut eth = Ethernet::parse(&mut frame[..])?;
@@ -78,7 +78,6 @@ mod field;
 mod frame;
 pub mod ipv4;
 pub mod ipv6;
-mod protocol;
 pub mod tcp;
 pub mod udp;
 pub mod vlan;
@@ -93,7 +92,6 @@ pub use frame::{
 };
 pub use ipv4::Ipv4;
 pub use ipv6::Ipv6;
-pub use protocol::Protocol;
 pub use tcp::Tcp;
 pub use udp::Udp;
 pub use vlan::Vlan;

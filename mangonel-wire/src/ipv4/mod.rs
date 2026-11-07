@@ -10,10 +10,23 @@ pub use icmp::Icmp;
 
 use crate::{
     Error,
-    Protocol,
     checksum,
     field,
 };
+
+/// What the payload carries, from the header's protocol field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Protocol(pub u8);
+
+impl Protocol {
+    pub const ICMP: Self = Self(1);
+    pub const IPV4: Self = Self(4);
+    pub const TCP: Self = Self(6);
+    pub const UDP: Self = Self(17);
+    pub const IPV6: Self = Self(41);
+    pub const ESP: Self = Self(50);
+    pub const AH: Self = Self(51);
+}
 
 /// The fixed header's length in bytes; options extend it.
 pub const HEADER_LEN: usize = 20;
@@ -24,7 +37,7 @@ pub const HEADER_LEN: usize = 20;
 /// ```
 /// use std::net::Ipv4Addr;
 ///
-/// use mangonel_wire::{Ipv4, Protocol};
+/// use mangonel_wire::{Ipv4, ipv4::Protocol};
 ///
 /// let mut bytes = [0u8; 40];
 /// let mut ip = Ipv4::init(&mut bytes[..])?;

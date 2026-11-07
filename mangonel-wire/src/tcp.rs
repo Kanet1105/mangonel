@@ -4,10 +4,12 @@ use std::net::IpAddr;
 
 use crate::{
     Error,
-    Protocol,
     checksum,
     field,
 };
+
+/// The IP protocol number, the same in both families.
+pub const PROTOCOL: u8 = 6;
 
 /// The fixed header's length in bytes; options extend it.
 pub const HEADER_LEN: usize = 20;
@@ -127,7 +129,7 @@ impl<T: AsRef<[u8]>> Tcp<T> {
     /// Whether the segment sums to what its checksum says.
     pub fn verify_checksum(&self, src: IpAddr, dst: IpAddr) -> bool {
         let segment = self.0.as_ref();
-        let pseudo = checksum::pseudo_header(src, dst, Protocol::TCP, segment.len());
+        let pseudo = checksum::pseudo_header(src, dst, PROTOCOL, segment.len());
 
         checksum::finish(pseudo + checksum::sum(segment)) == 0
     }
@@ -179,7 +181,7 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Tcp<T> {
     pub fn fill_checksum(&mut self, src: IpAddr, dst: IpAddr) {
         self.set_checksum(0);
         let segment = self.0.as_ref();
-        let pseudo = checksum::pseudo_header(src, dst, Protocol::TCP, segment.len());
+        let pseudo = checksum::pseudo_header(src, dst, PROTOCOL, segment.len());
         let sum = checksum::finish(pseudo + checksum::sum(segment));
         self.set_checksum(sum);
     }
