@@ -70,7 +70,6 @@
 
 #![warn(unreachable_pub)]
 
-pub mod arp;
 pub mod checksum;
 mod error;
 pub mod ethernet;
@@ -82,9 +81,11 @@ pub mod tcp;
 pub mod udp;
 pub mod vlan;
 
-pub use arp::Arp;
 pub use error::Error;
-pub use ethernet::Ethernet;
+pub use ethernet::{
+    Arp,
+    Ethernet,
+};
 pub use frame::{
     Frame,
     Packet,

@@ -51,7 +51,7 @@ pub fn parse(bytes: &mut [u8]) -> Result<Frame<'_>, Error> {
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::{Packet, arp::Operation};
+/// use mangonel_wire::{Packet, ethernet::arp::Operation};
 ///
 /// # let mut data = [0u8; 60];
 /// # data[12..14].copy_from_slice(&[0x08, 0x06]);
@@ -139,7 +139,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use super::*;
-    use crate::arp::Operation;
+    use crate::ethernet::arp::Operation;
 
     #[test]
     fn arp_request_is_answered_through_the_frame() {

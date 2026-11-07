@@ -1,4 +1,4 @@
-//! Ethernet II framing.
+//! The Ethernet II header.
 
 use crate::{
     Error,
