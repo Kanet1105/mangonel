@@ -45,22 +45,6 @@ pub fn parse(bytes: &mut [u8]) -> Result<Frame<'_>, Error> {
     })
 }
 
-/// What a frame carries, viewed in place.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Packet<'a> {
-    Arp(Arp<&'a mut [u8]>),
-
-    Ipv4(Ipv4<&'a mut [u8]>),
-
-    Ipv6(Ipv6<&'a mut [u8]>),
-
-    /// Something the crate has no view for.
-    Other {
-        ethertype: EtherType,
-        payload: &'a mut [u8],
-    },
-}
-
 /// A frame taken apart: the Ethernet header, a VLAN tag if
 /// there is one, and the packet after them, each viewed in
 /// place and all writable at once.
@@ -132,6 +116,22 @@ impl<'a> Frame<'a> {
     pub fn into_packet(self) -> Packet<'a> {
         self.packet
     }
+}
+
+/// What a frame carries, viewed in place.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Packet<'a> {
+    Arp(Arp<&'a mut [u8]>),
+
+    Ipv4(Ipv4<&'a mut [u8]>),
+
+    Ipv6(Ipv6<&'a mut [u8]>),
+
+    /// Something the crate has no view for.
+    Other {
+        ethertype: EtherType,
+        payload: &'a mut [u8],
+    },
 }
 
 #[cfg(test)]
