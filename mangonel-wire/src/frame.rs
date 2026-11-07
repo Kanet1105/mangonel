@@ -8,8 +8,10 @@ use crate::{
     Ipv6,
     Vlan,
     ethernet,
-    ethernet::EtherType,
-    vlan,
+    ethernet::{
+        EtherType,
+        vlan,
+    },
 };
 
 /// Takes `bytes` apart as a frame; fails if any header the

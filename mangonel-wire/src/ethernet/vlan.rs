@@ -1,9 +1,9 @@
 //! The 802.1Q tag that follows an Ethernet header whose
 //! ethertype is [`EtherType::VLAN`].
 
+use super::EtherType;
 use crate::{
     Error,
-    ethernet::EtherType,
     field,
 };
 
@@ -15,7 +15,7 @@ pub const HEADER_LEN: usize = 4;
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::{Vlan, ethernet::EtherType};
+/// use mangonel_wire::ethernet::{EtherType, Vlan};
 ///
 /// let mut tag = [0u8; 4];
 /// let mut vlan = Vlan::parse(&mut tag[..])?;

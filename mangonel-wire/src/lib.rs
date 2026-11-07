@@ -79,12 +79,12 @@ pub mod ipv4;
 pub mod ipv6;
 pub mod tcp;
 pub mod udp;
-pub mod vlan;
 
 pub use error::Error;
 pub use ethernet::{
     Arp,
     Ethernet,
+    Vlan,
 };
 pub use frame::{
     Frame,
@@ -95,4 +95,3 @@ pub use ipv4::Ipv4;
 pub use ipv6::Ipv6;
 pub use tcp::Tcp;
 pub use udp::Udp;
-pub use vlan::Vlan;
