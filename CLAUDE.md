@@ -7,9 +7,9 @@ mangonel is a WAN/LAN gateway whose data plane runs in userspace over AF_XDP (Li
 ## Commands
 
 ```sh
-just deps                 # install libxdp/libbpf headers + libclang (bindgen needs them)
-just build                # cargo test --workspace, then cargo build --release
-just lint                 # cargo sort --workspace -g; cargo +nightly fmt; cargo clippy --release
+scripts/deps.sh           # install libxdp/libbpf headers + libclang (bindgen needs them)
+scripts/build.sh          # cargo test --workspace, then cargo build --release
+scripts/lint.sh           # cargo sort --workspace -g; cargo +nightly fmt; cargo clippy --release
 
 cargo test -p mangonel-control-plane                      # one crate
 cargo test -p mangonel-libxdp default_frames_fill_one_socket  # one test (name filter)
@@ -18,9 +18,9 @@ cargo run -p mangonel-nic --example dump [ifname ...]     # print what Nic sees 
 scripts/e2e-env.sh up|down|status|check                   # netns topology for e2e tests; sudo is implied
 ```
 
-- `just lint` rewrites files (`cargo sort` and `fmt`), so it does more than check.
+- `scripts/lint.sh` rewrites files (`cargo sort` and `fmt`), so it does more than check.
 - `rustfmt.toml` uses nightly-only options (`group_imports = "StdExternalCrate"`, `imports_granularity = "Crate"`, comments wrapped at 100 columns, `imports_layout = "Vertical"`). Always format with `cargo +nightly fmt`. Stable `cargo fmt` gives different output.
-- CI (`.github/workflows/ci.yml`) runs `just build` and `just lint` on Ubuntu, Fedora and Arch with Rust **1.88.0**, so code must build on that toolchain. CI triggers only on pushes and PRs to `dev`, not `main`.
+- There is no CI yet. Code must build on Rust **1.88.0**.
 - Unit tests need no privileges. Binding a socket needs root, or CAP_NET_ADMIN plus CAP_SYS_RESOURCE (`bind` raises RLIMIT_MEMLOCK).
 - `mangonel-libxdp-sys` generates bindings from the system's `xdp/xsk.h` at build time. If the headers live outside the default paths, set `BINDGEN_EXTRA_CLANG_ARGS=-I...` and `RUSTFLAGS=-L...`.
 
