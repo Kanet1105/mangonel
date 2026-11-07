@@ -6,14 +6,14 @@
 //! accessors rely on: lengths and the fixed fields a header
 //! is recognised by. A view over `&mut [u8]` reads and
 //! writes; one over `&[u8]` only reads. [`parse`] takes a
-//! whole frame apart into a [`Frame`], and
-//! [`Ipv4::transport_mut`] and [`Ipv6::transport_mut`] carry
-//! on into a [`Transport`]. [`Frame::dhcp`] picks out a DHCP
+//! whole frame apart into a [`Frame`]; the IP views hand the
+//! transport header on through `payload_mut` or, for IPv6,
+//! [`Ipv6::upper_layer_mut`]. [`Frame::dhcp`] picks out a DHCP
 //! message with what `mangonel-dhcp`'s handler takes with it.
 //!
 //! # Examples
 //! ```
-//! use mangonel_wire::{Packet, Transport};
+//! use mangonel_wire::{Packet, Protocol, Udp};
 //!
 //! # let mut data = [0u8; 60];
 //! # data[12..14].copy_from_slice(&[0x08, 0x00]);
@@ -24,10 +24,10 @@
 //! let mut frame = mangonel_wire::parse(&mut data[..])?;
 //! match frame.packet_mut() {
 //!     Packet::Arp(arp) => { /* answer it */ }
-//!     Packet::Ipv4(ip) => match ip.transport_mut()? {
-//!         Transport::Udp(udp) => assert_eq!(udp.length(), 8),
-//!         _ => {}
-//!     },
+//!     Packet::Ipv4(ip) if ip.protocol() == Protocol::UDP && !ip.is_fragment() => {
+//!         let udp = Udp::parse(ip.payload_mut())?;
+//!         assert_eq!(udp.length(), 8);
+//!     }
 //!     _ => {}
 //! }
 //! let (dst, src) = (frame.destination(), frame.source());
@@ -83,7 +83,6 @@ pub mod ipv6;
 pub mod nd;
 mod protocol;
 pub mod tcp;
-mod transport;
 pub mod udp;
 pub mod vlan;
 
@@ -102,6 +101,5 @@ pub use ipv4::Ipv4;
 pub use ipv6::Ipv6;
 pub use protocol::Protocol;
 pub use tcp::Tcp;
-pub use transport::Transport;
 pub use udp::Udp;
 pub use vlan::Vlan;

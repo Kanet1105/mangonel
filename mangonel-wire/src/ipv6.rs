@@ -5,7 +5,6 @@ use std::net::Ipv6Addr;
 use crate::{
     Error,
     Protocol,
-    Transport,
     field,
 };
 
@@ -108,20 +107,13 @@ impl<T: AsRef<[u8]>> Ipv6<T> {
     }
 
     /// The protocol past the extension headers and the bytes
-    /// from where it starts.
+    /// from where it starts; a later fragment reports
+    /// [`Protocol::FRAGMENT`] because its header is in the first.
     pub fn upper_layer(&self) -> Result<(Protocol, &[u8]), Error> {
         let payload = self.payload();
         let (protocol, at) = skip_extensions(self.next_header(), payload)?;
 
         Ok((protocol, &payload[at..]))
-    }
-
-    /// The upper layer viewed by protocol; a later fragment is
-    /// [`Transport::Other`] because its header is in the first.
-    pub fn transport(&self) -> Result<Transport<&[u8]>, Error> {
-        let (protocol, bytes) = self.upper_layer()?;
-
-        Transport::parse(protocol, bytes)
     }
 }
 
@@ -192,13 +184,6 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Ipv6<T> {
         let (protocol, at) = skip_extensions(next, payload)?;
 
         Ok((protocol, &mut payload[at..]))
-    }
-
-    /// Exclusive [`Self::transport`].
-    pub fn transport_mut(&mut self) -> Result<Transport<&mut [u8]>, Error> {
-        let (protocol, bytes) = self.upper_layer_mut()?;
-
-        Transport::parse(protocol, bytes)
     }
 }
 
@@ -317,24 +302,21 @@ mod tests {
     }
 
     #[test]
-    fn transport_stops_at_a_later_fragment() {
+    fn upper_layer_stops_at_a_later_fragment() {
         let mut bytes = [0u8; 40 + 8 + 8];
         let mut ip = Ipv6::init(&mut bytes[..]).unwrap();
         ip.set_payload_length(16).unwrap();
         ip.set_next_header(Protocol::FRAGMENT);
         let payload = ip.payload_mut();
         payload[0] = Protocol::UDP.0;
-        payload[13] = 8;
-        assert!(matches!(ip.transport(), Ok(Transport::Udp(_))));
-        if let Ok(Transport::Udp(mut udp)) = ip.transport_mut() {
-            udp.set_source_port(1);
-        }
+        let (protocol, transport) = ip.upper_layer_mut().unwrap();
+        assert_eq!(protocol, Protocol::UDP);
+        transport[1] = 1;
         assert_eq!(bytes[48..50], [0, 1]);
         bytes[42..44].copy_from_slice(&[0x00, 0x08]);
         let ip = Ipv6::parse(&bytes[..]).unwrap();
-        assert!(matches!(
-            ip.transport(),
-            Ok(Transport::Other { protocol: Protocol::FRAGMENT, payload }) if payload.len() == 16
-        ));
+        let (protocol, rest) = ip.upper_layer().unwrap();
+        assert_eq!(protocol, Protocol::FRAGMENT);
+        assert_eq!(rest.len(), 16);
     }
 }

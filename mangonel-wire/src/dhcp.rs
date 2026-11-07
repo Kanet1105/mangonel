@@ -6,7 +6,7 @@ use std::net::Ipv6Addr;
 use crate::{
     Frame,
     Packet,
-    Transport,
+    Protocol,
     Udp,
     udp,
 };
@@ -67,9 +67,10 @@ impl Frame<'_> {
     pub fn dhcp(&self) -> Option<Dhcp<'_>> {
         match self.packet() {
             Packet::Ipv4(ip) => {
-                let Transport::Udp(udp) = ip.transport().ok()? else {
+                if ip.protocol() != Protocol::UDP || ip.is_fragment() {
                     return None;
-                };
+                }
+                let udp = Udp::parse(ip.payload()).ok()?;
 
                 match udp.destination_port() {
                     V4_SERVER_PORT => Some(Dhcp::V4Server {
@@ -82,9 +83,11 @@ impl Frame<'_> {
                 }
             }
             Packet::Ipv6(ip) => {
-                let Transport::Udp(udp) = ip.transport().ok()? else {
+                let (protocol, bytes) = ip.upper_layer().ok()?;
+                if protocol != Protocol::UDP {
                     return None;
-                };
+                }
+                let udp = Udp::parse(bytes).ok()?;
 
                 match udp.destination_port() {
                     V6_SERVER_PORT => Some(Dhcp::V6Server {
