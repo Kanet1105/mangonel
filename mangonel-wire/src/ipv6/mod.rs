@@ -3,7 +3,7 @@
 
 pub mod dhcp;
 pub mod icmp;
-pub mod nd;
+pub mod ndp;
 
 use std::net::Ipv6Addr;
 

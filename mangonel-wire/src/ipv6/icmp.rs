@@ -1,5 +1,5 @@
 //! ICMPv6 (RFC 4443); Neighbor Discovery messages are viewed
-//! through [`crate::ipv6::nd`].
+//! through [`crate::ipv6::ndp`].
 
 use std::net::Ipv6Addr;
 

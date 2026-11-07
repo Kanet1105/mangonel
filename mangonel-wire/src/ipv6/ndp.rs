@@ -217,7 +217,7 @@ message! {
     /// ```
     /// use std::net::Ipv6Addr;
     ///
-    /// use mangonel_wire::ipv6::nd::{NeighborSolicitation, OptionKind, link_layer_option};
+    /// use mangonel_wire::ipv6::ndp::{NeighborSolicitation, OptionKind, link_layer_option};
     ///
     /// let mut bytes = [0u8; 32];
     /// let mut ns = NeighborSolicitation::init(&mut bytes[..])?;
