@@ -5,6 +5,7 @@ use std::net::Ipv4Addr;
 use crate::{
     Error,
     Protocol,
+    Transport,
     checksum,
     field,
 };
@@ -162,6 +163,20 @@ impl<T: AsRef<[u8]>> Ipv4<T> {
     pub fn payload(&self) -> &[u8] {
         &self.0.as_ref()[self.header_len()..usize::from(self.total_length())]
     }
+
+    /// The payload viewed by protocol; a later fragment is
+    /// [`Transport::Other`] because its header is in the first.
+    pub fn transport(&self) -> Result<Transport<&[u8]>, Error> {
+        Transport::parse(self.transport_protocol(), self.payload())
+    }
+
+    fn transport_protocol(&self) -> Protocol {
+        if self.fragment_offset() == 0 {
+            self.protocol()
+        } else {
+            Protocol::FRAGMENT
+        }
+    }
 }
 
 impl<T: AsRef<[u8]> + AsMut<[u8]>> Ipv4<T> {
@@ -252,6 +267,13 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Ipv4<T> {
 
         &mut self.0.as_mut()[start..end]
     }
+
+    /// Exclusive [`Self::transport`].
+    pub fn transport_mut(&mut self) -> Result<Transport<&mut [u8]>, Error> {
+        let protocol = self.transport_protocol();
+
+        Transport::parse(protocol, self.payload_mut())
+    }
 }
 
 #[cfg(test)]
@@ -340,5 +362,38 @@ mod tests {
         ip.set_ecn(1);
         assert_eq!((ip.dscp(), ip.ecn()), (0x2E, 1));
         assert_eq!(ip.payload_mut(), &[0xFF; 10]);
+    }
+
+    #[test]
+    fn transport_follows_the_protocol() {
+        let mut bytes = [0u8; 28];
+        let mut ip = Ipv4::init(&mut bytes[..]).unwrap();
+        ip.set_total_length(28).unwrap();
+        ip.set_protocol(Protocol::UDP);
+        assert_eq!(ip.transport(), Err(Error::Length(0)));
+        ip.payload_mut()[5] = 8;
+        assert!(matches!(ip.transport(), Ok(Transport::Udp(_))));
+        if let Ok(Transport::Udp(mut udp)) = ip.transport_mut() {
+            udp.set_destination_port(53);
+        }
+        assert_eq!(bytes[22..24], [0, 53]);
+
+        let mut ip = Ipv4::parse(&mut bytes[..]).unwrap();
+        ip.set_protocol(Protocol::ESP);
+        assert!(matches!(
+            ip.transport(),
+            Ok(Transport::Other { protocol: Protocol::ESP, payload }) if payload.len() == 8
+        ));
+        ip.set_protocol(Protocol::UDP);
+        bytes[7] = 1;
+        let ip = Ipv4::parse(&bytes[..]).unwrap();
+        assert_eq!(ip.fragment_offset(), 8);
+        assert!(matches!(
+            ip.transport(),
+            Ok(Transport::Other {
+                protocol: Protocol::FRAGMENT,
+                ..
+            })
+        ));
     }
 }
