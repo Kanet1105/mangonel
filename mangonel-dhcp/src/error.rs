@@ -17,6 +17,7 @@ use thiserror::Error as ThisError;
 ///     pool_start: "10.0.0.10".parse()?,
 ///     pool_end: "10.0.0.200".parse()?,
 ///     dns: vec![],
+///     reservations: std::collections::HashMap::new(),
 ///     lease_time: std::time::Duration::from_secs(60),
 /// })?;
 /// let garbage = [0u8; 3];
@@ -30,16 +31,28 @@ use thiserror::Error as ThisError;
 pub enum Error {
     #[error("malformed message: {0}")]
     Decode(#[from] DecodeError),
+
     #[error("prefix /{0} leaves no room for a pool")]
     PrefixTooLong(u8),
+
     #[error("pool start {0} is after pool end {1}")]
     PoolReversed(IpAddr, IpAddr),
+
     #[error("pool {0} - {1} is not a host range inside the subnet")]
     PoolOutsideSubnet(IpAddr, IpAddr),
+
     #[error("server address {0} is inside its own pool")]
     AddressInPool(IpAddr),
+
+    #[error("reserved address {0} is not a usable host in the subnet")]
+    ReservedNotHost(IpAddr),
+
+    #[error("address {0} is reserved for more than one MAC")]
+    ReservedTwice(IpAddr),
+
     #[error("a lifetime of zero")]
     ZeroLifetime,
+
     #[error("preferred lifetime is longer than the valid lifetime")]
     PreferredOutlivesValid,
 }

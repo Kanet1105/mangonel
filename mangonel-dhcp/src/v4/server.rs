@@ -1,7 +1,10 @@
 //! A DHCPv4 server for one subnet with one address pool.
 
 use std::{
-    collections::HashMap,
+    collections::{
+        HashMap,
+        HashSet,
+    },
     net::Ipv4Addr,
     time::{
         Duration,
@@ -39,7 +42,7 @@ const DECLINE_HOLD: Duration = Duration::from_secs(10 * 60);
 ///
 /// # Examples
 /// ```
-/// use std::{net::Ipv4Addr, time::Duration};
+/// use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
 ///
 /// use mangonel_dhcp::v4::server::Config;
 ///
@@ -49,6 +52,7 @@ const DECLINE_HOLD: Duration = Duration::from_secs(10 * 60);
 ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
 ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
 ///     dns: vec![Ipv4Addr::new(10, 0, 0, 1)],
+///     reservations: HashMap::from([([2, 0, 0, 4, 0, 0], Ipv4Addr::new(10, 0, 0, 2))]),
 ///     lease_time: Duration::from_secs(3600),
 /// };
 /// assert!(config.validate().is_ok());
@@ -65,6 +69,9 @@ pub struct Config {
     pub pool_end: Ipv4Addr,
     /// Resolvers advertised to clients; empty advertises none.
     pub dns: Vec<Ipv4Addr>,
+    /// Addresses fixed to a MAC; they may lie outside the pool
+    /// and go to nobody else.
+    pub reservations: HashMap<[u8; 6], Ipv4Addr>,
     /// How long a lease lasts.
     pub lease_time: Duration,
 }
@@ -75,7 +82,7 @@ impl Config {
     ///
     /// # Examples
     /// ```
-    /// use std::{net::Ipv4Addr, time::Duration};
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
     ///
     /// use mangonel_dhcp::{Error, v4::server::Config};
     ///
@@ -85,6 +92,7 @@ impl Config {
     ///     pool_start: Ipv4Addr::new(10, 0, 1, 10),
     ///     pool_end: Ipv4Addr::new(10, 0, 1, 20),
     ///     dns: vec![],
+    ///     reservations: HashMap::new(),
     ///     lease_time: Duration::from_secs(3600),
     /// };
     /// assert!(matches!(config.validate(), Err(Error::PoolOutsideSubnet(..))));
@@ -107,6 +115,15 @@ impl Config {
         }
         if self.contains(self.address) {
             return Err(Error::AddressInPool(self.address.into()));
+        }
+        let mut reserved = HashSet::with_capacity(self.reservations.len());
+        for &address in self.reservations.values() {
+            if !self.is_host(address) || address == self.address {
+                return Err(Error::ReservedNotHost(address.into()));
+            }
+            if !reserved.insert(address) {
+                return Err(Error::ReservedTwice(address.into()));
+            }
         }
         if self.lease_time.is_zero() {
             return Err(Error::ZeroLifetime);
@@ -140,7 +157,7 @@ impl Config {
 ///
 /// # Examples
 /// ```
-/// use std::{net::Ipv4Addr, time::{Duration, Instant}};
+/// use std::{collections::HashMap, net::Ipv4Addr, time::{Duration, Instant}};
 ///
 /// use mangonel_dhcp::v4::{client, server};
 ///
@@ -150,6 +167,7 @@ impl Config {
 ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
 ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
 ///     dns: vec![],
+///     reservations: HashMap::new(),
 ///     lease_time: Duration::from_secs(3600),
 /// })?;
 /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
@@ -182,7 +200,7 @@ impl Lease {
     ///
     /// # Examples
     /// ```
-    /// use std::{net::Ipv4Addr, time::{Duration, Instant}};
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::{Duration, Instant}};
     ///
     /// use mangonel_dhcp::v4::{client, server};
     ///
@@ -192,6 +210,7 @@ impl Lease {
     /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
     /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # lease_time: Duration::from_secs(3600),
     /// # })?;
     /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
@@ -256,7 +275,7 @@ pub struct Reply {
 ///
 /// # Examples
 /// ```
-/// use std::{net::Ipv4Addr, time::Duration};
+/// use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
 ///
 /// use mangonel_dhcp::v4::server::{Config, Server};
 ///
@@ -266,6 +285,7 @@ pub struct Reply {
 ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
 ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
 ///     dns: vec![],
+///     reservations: HashMap::new(),
 ///     lease_time: Duration::from_secs(3600),
 /// })?;
 /// assert_eq!(server.leases().count(), 0);
@@ -277,6 +297,8 @@ pub struct Server {
     leases: HashMap<Vec<u8>, Lease>,
     by_address: HashMap<Ipv4Addr, Vec<u8>>,
     declined: HashMap<Ipv4Addr, Instant>,
+    /// Every reserved address, which the scan passes over.
+    reserved: HashSet<Ipv4Addr>,
     /// Where the next pool scan starts, as an offset into the pool.
     cursor: u32,
 }
@@ -287,7 +309,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::{net::Ipv4Addr, time::Duration};
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
     ///
     /// use mangonel_dhcp::v4::server::{Config, Server};
     ///
@@ -297,6 +319,7 @@ impl Server {
     ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
     ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
     ///     dns: vec![],
+    ///     reservations: HashMap::new(),
     ///     lease_time: Duration::from_secs(3600),
     /// })?;
     /// assert_eq!(server.config().prefix, 24);
@@ -304,12 +327,14 @@ impl Server {
     /// ```
     pub fn new(config: Config) -> Result<Self, Error> {
         config.validate()?;
+        let reserved = config.reservations.values().copied().collect();
 
         Ok(Self {
             config,
             leases: HashMap::new(),
             by_address: HashMap::new(),
             declined: HashMap::new(),
+            reserved,
             cursor: 0,
         })
     }
@@ -318,7 +343,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::{net::Ipv4Addr, time::Duration};
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
     ///
     /// use mangonel_dhcp::v4::server::{Config, Server};
     ///
@@ -328,6 +353,7 @@ impl Server {
     ///     pool_start: Ipv4Addr::new(10, 0, 0, 10),
     ///     pool_end: Ipv4Addr::new(10, 0, 0, 200),
     ///     dns: vec![],
+    ///     reservations: HashMap::new(),
     ///     lease_time: Duration::from_secs(3600),
     /// };
     /// let server = Server::new(config.clone())?;
@@ -342,7 +368,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::{net::Ipv4Addr, time::Duration};
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
     ///
     /// use mangonel_dhcp::v4::server::{Config, Server};
     ///
@@ -352,6 +378,7 @@ impl Server {
     /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
     /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # lease_time: Duration::from_secs(3600),
     /// # })?;
     /// assert!(server.leases().next().is_none());
@@ -366,7 +393,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::{net::Ipv4Addr, time::{Duration, Instant}};
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::{Duration, Instant}};
     ///
     /// use mangonel_dhcp::v4::server::{Config, Server};
     ///
@@ -376,6 +403,7 @@ impl Server {
     /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
     /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # lease_time: Duration::from_secs(3600),
     /// # })?;
     /// assert_eq!(server.expire(Instant::now()), 0);
@@ -402,7 +430,7 @@ impl Server {
     ///
     /// # Examples
     /// ```
-    /// use std::{net::Ipv4Addr, time::{Duration, Instant}};
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::{Duration, Instant}};
     ///
     /// use mangonel_dhcp::v4::{client, server};
     ///
@@ -412,6 +440,7 @@ impl Server {
     /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
     /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # lease_time: Duration::from_secs(3600),
     /// # })?;
     /// let mut client = client::Client::with_seed(client::Config::new([2, 0, 0, 4, 0, 0]), 1);
@@ -464,7 +493,7 @@ impl Server {
         mac: [u8; 6],
         now: Instant,
     ) -> Option<Reply> {
-        let address = self.choose(&id, v4::requested_ip_of(msg), now)?;
+        let address = self.choose(&id, mac, v4::requested_ip_of(msg), now)?;
         // A client that already holds the address keeps its lease; only a
         // newcomer gets a short-lived offer.
         let held = self.leases.get(&id).is_some_and(|lease| lease.bound);
@@ -485,6 +514,9 @@ impl Server {
     fn request(&mut self, msg: &Message, id: Vec<u8>, mac: [u8; 6], now: Instant) -> Option<Reply> {
         let requested = v4::requested_ip_of(msg);
         let ciaddr = msg.ciaddr();
+        // A reserved client gets its reservation and nothing else, whether or
+        // not a lease is on record.
+        let reserved = self.config.reservations.get(&mac).copied();
         let current = self.leases.get(&id).map(|lease| lease.address);
         let granted = match (v4::server_id_of(msg), requested, ciaddr.is_unspecified()) {
             // SELECTING: the client answers an offer, maybe another server's.
@@ -494,21 +526,26 @@ impl Server {
 
                     return None;
                 }
-                match requested {
-                    Some(r) if current == Some(r) || self.is_free(r, now) => Some(r),
+                match (requested, reserved) {
+                    (Some(r), Some(res)) => (r == res).then_some(r),
+                    (Some(r), None) if current == Some(r) || self.is_free(r, now) => Some(r),
                     _ => None,
                 }
             }
             // INIT-REBOOT: the client checks an address it remembers.
-            (None, Some(r), true) => match current {
-                Some(c) if c == r => Some(r),
-                Some(_) => None,
-                None if !v4::same_subnet(r, self.config.address, self.config.prefix) => None,
+            (None, Some(r), true) => match (reserved, current) {
+                (Some(res), _) => (r == res).then_some(r),
+                (None, Some(c)) => (c == r).then_some(r),
+                (None, None) if !v4::same_subnet(r, self.config.address, self.config.prefix) => {
+                    None
+                }
                 // No record of this client: RFC 2131 says stay silent.
-                None => return None,
+                (None, None) => return None,
             },
             // RENEWING or REBINDING: the client extends the lease it holds.
-            (None, _, false) => (current == Some(ciaddr)).then_some(ciaddr),
+            (None, _, false) => reserved
+                .map_or(current == Some(ciaddr), |res| res == ciaddr)
+                .then_some(ciaddr),
             _ => return None,
         };
 
@@ -545,9 +582,18 @@ impl Server {
         }
     }
 
-    /// The client's current address, the one it asked for,
-    /// or the next free one, in that order.
-    fn choose(&mut self, id: &[u8], requested: Option<Ipv4Addr>, now: Instant) -> Option<Ipv4Addr> {
+    /// The client's reservation, its current address, the one
+    /// it asked for, or the next free one, in that order.
+    fn choose(
+        &mut self,
+        id: &[u8],
+        mac: [u8; 6],
+        requested: Option<Ipv4Addr>,
+        now: Instant,
+    ) -> Option<Ipv4Addr> {
+        if let Some(reserved) = self.config.reservations.get(&mac) {
+            return Some(*reserved);
+        }
         if let Some(lease) = self.leases.get(id) {
             return Some(lease.address);
         }
@@ -573,6 +619,7 @@ impl Server {
 
     fn is_free(&self, address: Ipv4Addr, now: Instant) -> bool {
         self.config.contains(address)
+            && !self.reserved.contains(&address)
             && !self.by_address.contains_key(&address)
             && self
                 .declined
@@ -691,16 +738,27 @@ mod tests {
     const MAC: [u8; 6] = [2, 0, 0, 4, 0, 0];
     const NONE: Ipv4Addr = Ipv4Addr::UNSPECIFIED;
 
-    fn server() -> Server {
-        Server::new(Config {
+    fn config() -> Config {
+        Config {
             address: GATEWAY,
             prefix: 24,
             pool_start: Ipv4Addr::new(10, 0, 0, 10),
             pool_end: Ipv4Addr::new(10, 0, 0, 12),
             dns: vec![GATEWAY],
+            reservations: HashMap::new(),
             lease_time: Duration::from_secs(600),
-        })
-        .unwrap()
+        }
+    }
+
+    fn config_with(mac: [u8; 6], address: Ipv4Addr) -> Config {
+        let mut config = config();
+        config.reservations.insert(mac, address);
+
+        config
+    }
+
+    fn server() -> Server {
+        Server::new(config()).unwrap()
     }
 
     fn message(
@@ -837,5 +895,78 @@ mod tests {
         assert!(send(&mut server, &more, now).is_none());
         assert_eq!(server.expire(now + OFFER_HOLD), 3);
         assert!(send(&mut server, &more, now + OFFER_HOLD).is_some());
+    }
+
+    #[test]
+    fn reserved_address_follows_its_mac() {
+        let reserved = Ipv4Addr::new(10, 0, 0, 50);
+        let mut server = Server::new(config_with(MAC, reserved)).unwrap();
+        let now = Instant::now();
+        let kind = |reply: Option<Reply>| decode(&reply.unwrap()).opts().msg_type();
+
+        // The holder gets its reservation, whatever it asks for; a stranger
+        // asking for the reservation is steered elsewhere.
+        let hint = vec![DhcpOption::RequestedIpAddress(Ipv4Addr::new(10, 0, 0, 10))];
+        let discover = message(MessageType::Discover, MAC, NONE, hint);
+        let offer = send(&mut server, &discover, now).unwrap();
+        assert_eq!(decode(&offer).yiaddr(), reserved);
+        let stranger = [2, 0, 0, 4, 0, 1];
+        let hint = vec![DhcpOption::RequestedIpAddress(reserved)];
+        let discover = message(MessageType::Discover, stranger, NONE, hint);
+        let offer = send(&mut server, &discover, now).unwrap();
+        assert_eq!(decode(&offer).yiaddr(), Ipv4Addr::new(10, 0, 0, 10));
+        let select = vec![
+            DhcpOption::RequestedIpAddress(reserved),
+            DhcpOption::ServerIdentifier(GATEWAY),
+        ];
+        let request = message(MessageType::Request, stranger, NONE, select);
+        assert_eq!(
+            kind(send(&mut server, &request, now)),
+            Some(MessageType::Nak)
+        );
+
+        // The reservation is the record of its holder: a fresh server
+        // acknowledges a reboot into it and refuses a reboot into anything else.
+        let mut fresh = Server::new(config_with(MAC, reserved)).unwrap();
+        let reboot = vec![DhcpOption::RequestedIpAddress(reserved)];
+        let request = message(MessageType::Request, MAC, NONE, reboot);
+        let ack = send(&mut fresh, &request, now).unwrap();
+        assert_eq!(decode(&ack).opts().msg_type(), Some(MessageType::Ack));
+        assert_eq!(decode(&ack).yiaddr(), reserved);
+        let stale = vec![DhcpOption::RequestedIpAddress(Ipv4Addr::new(10, 0, 0, 11))];
+        let request = message(MessageType::Request, MAC, NONE, stale);
+        assert_eq!(
+            kind(send(&mut fresh, &request, now)),
+            Some(MessageType::Nak)
+        );
+        let renew = message(MessageType::Request, MAC, reserved, vec![]);
+        assert_eq!(kind(send(&mut fresh, &renew, now)), Some(MessageType::Ack));
+    }
+
+    #[test]
+    fn reservations_are_checked_and_skipped() {
+        let mut config = config_with(MAC, Ipv4Addr::new(10, 0, 1, 5));
+        assert!(matches!(config.validate(), Err(Error::ReservedNotHost(_))));
+        config.reservations.insert(MAC, GATEWAY);
+        assert!(matches!(config.validate(), Err(Error::ReservedNotHost(_))));
+        config.reservations.insert(MAC, Ipv4Addr::new(10, 0, 0, 11));
+        config
+            .reservations
+            .insert([2, 0, 0, 4, 0, 1], Ipv4Addr::new(10, 0, 0, 11));
+        assert!(matches!(config.validate(), Err(Error::ReservedTwice(_))));
+        config.reservations.remove(&[2, 0, 0, 4, 0, 1]);
+
+        // A reservation inside the pool is passed over by the scan.
+        let mut server = Server::new(config).unwrap();
+        let now = Instant::now();
+        let mut offered = Vec::new();
+        for i in 1..4 {
+            let discover = message(MessageType::Discover, [2, 0, 0, 4, 0, i], NONE, vec![]);
+            offered.extend(send(&mut server, &discover, now).map(|o| decode(&o).yiaddr()));
+        }
+        assert_eq!(
+            offered,
+            vec![Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 12)]
+        );
     }
 }

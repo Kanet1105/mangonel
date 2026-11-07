@@ -101,7 +101,7 @@ impl Config {
 ///
 /// # Examples
 /// ```
-/// use std::time::{Duration, Instant};
+/// use std::{collections::HashMap, time::{Duration, Instant}};
 ///
 /// use mangonel_dhcp::v6::{client, server};
 ///
@@ -112,6 +112,7 @@ impl Config {
 ///     pool_start: "2001:db8:1::100".parse()?,
 ///     pool_end: "2001:db8:1::1ff".parse()?,
 ///     dns: vec![],
+///     reservations: HashMap::new(),
 ///     preferred_lifetime: Duration::from_secs(1800),
 ///     valid_lifetime: Duration::from_secs(3600),
 ///     rapid_commit: false,
@@ -401,7 +402,7 @@ impl Client {
     ///
     /// # Examples
     /// ```
-    /// use std::time::{Duration, Instant};
+    /// use std::{collections::HashMap, time::{Duration, Instant}};
     ///
     /// use mangonel_dhcp::v6::{client, server};
     ///
@@ -412,6 +413,7 @@ impl Client {
     /// # pool_start: "2001:db8:1::100".parse()?,
     /// # pool_end: "2001:db8:1::1ff".parse()?,
     /// # dns: vec![],
+    /// # reservations: HashMap::new(),
     /// # preferred_lifetime: Duration::from_secs(1800),
     /// # valid_lifetime: Duration::from_secs(3600),
     /// # rapid_commit: false,
@@ -782,6 +784,8 @@ fn transmit(msg: &Message) -> Transmit {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::v6::server;
 
@@ -799,6 +803,7 @@ mod tests {
             pool_start: addr("2001:db8:1::10"),
             pool_end: addr("2001:db8:1::12"),
             dns: vec![addr("2001:db8:1::1")],
+            reservations: HashMap::new(),
             preferred_lifetime: Duration::from_secs(600),
             valid_lifetime: Duration::from_secs(900),
             rapid_commit: true,
