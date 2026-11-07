@@ -7,8 +7,8 @@ use crate::{
     Ipv4,
     Ipv6,
     Vlan,
-    ethernet,
-    ethernet::{
+    data_link::ethernet::{
+        self,
         EtherType,
         vlan,
     },
@@ -53,7 +53,7 @@ pub fn parse(bytes: &mut [u8]) -> Result<Frame<'_>, Error> {
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::{Packet, ethernet::arp::Operation};
+/// use mangonel_wire::{Packet, data_link::ethernet::arp::Operation};
 ///
 /// # let mut data = [0u8; 60];
 /// # data[12..14].copy_from_slice(&[0x08, 0x06]);
@@ -141,7 +141,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use super::*;
-    use crate::ethernet::arp::Operation;
+    use crate::data_link::ethernet::arp::Operation;
 
     #[test]
     fn arp_request_is_answered_through_the_frame() {

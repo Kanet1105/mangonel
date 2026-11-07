@@ -41,7 +41,7 @@
 //! ```
 //! use std::net::Ipv4Addr;
 //!
-//! use mangonel_wire::{Ethernet, Ipv4, Udp, ethernet::EtherType, ipv4::Protocol};
+//! use mangonel_wire::{Ethernet, Ipv4, Udp, data_link::ethernet::EtherType, ipv4::Protocol};
 //!
 //! let mut frame = [0u8; 64];
 //! let mut eth = Ethernet::parse(&mut frame[..])?;
@@ -71,21 +71,20 @@
 #![warn(unreachable_pub)]
 
 pub mod checksum;
+pub mod data_link;
 mod error;
-pub mod ethernet;
 mod field;
 mod frame;
 pub mod ipv4;
 pub mod ipv6;
-pub mod tcp;
-pub mod udp;
+pub mod transport;
 
-pub use error::Error;
-pub use ethernet::{
+pub use data_link::{
     Arp,
     Ethernet,
     Vlan,
 };
+pub use error::Error;
 pub use frame::{
     Frame,
     Packet,
@@ -93,5 +92,7 @@ pub use frame::{
 };
 pub use ipv4::Ipv4;
 pub use ipv6::Ipv6;
-pub use tcp::Tcp;
-pub use udp::Udp;
+pub use transport::{
+    Tcp,
+    Udp,
+};

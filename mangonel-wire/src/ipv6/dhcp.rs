@@ -9,7 +9,7 @@ use crate::{
         Ipv6,
         Protocol,
     },
-    udp,
+    transport::udp,
 };
 
 pub const CLIENT_PORT: u16 = 546;

@@ -25,7 +25,7 @@ impl Operation {
 /// ```
 /// use std::net::Ipv4Addr;
 ///
-/// use mangonel_wire::{Arp, ethernet::arp::Operation};
+/// use mangonel_wire::{Arp, data_link::ethernet::arp::Operation};
 ///
 /// let mut bytes = [0u8; 28];
 /// let mut arp = Arp::init(&mut bytes[..])?;

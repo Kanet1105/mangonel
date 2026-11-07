@@ -23,7 +23,7 @@ impl EtherType {
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::{Ethernet, ethernet::EtherType};
+/// use mangonel_wire::{Ethernet, data_link::ethernet::EtherType};
 ///
 /// let mut frame = [0u8; 60];
 /// let mut eth = Ethernet::parse(&mut frame[..])?;

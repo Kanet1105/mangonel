@@ -15,7 +15,7 @@ pub const HEADER_LEN: usize = 4;
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::ethernet::{EtherType, Vlan};
+/// use mangonel_wire::data_link::ethernet::{EtherType, Vlan};
 ///
 /// let mut tag = [0u8; 4];
 /// let mut vlan = Vlan::parse(&mut tag[..])?;

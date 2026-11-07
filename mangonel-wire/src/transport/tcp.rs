@@ -46,7 +46,7 @@ impl std::ops::BitOr for Flags {
 ///
 /// # Examples
 /// ```
-/// use mangonel_wire::{Tcp, tcp::Flags};
+/// use mangonel_wire::{Tcp, transport::tcp::Flags};
 ///
 /// let mut bytes = [0u8; 20];
 /// let mut tcp = Tcp::init(&mut bytes[..])?;
