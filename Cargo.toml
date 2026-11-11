@@ -8,6 +8,7 @@ members = [
     "mangonel-nic",
     "mangonel-ring",
     "mangonel-router",
+    "mangonel-trafficgen",
     "mangonel-wire",
 ]
 

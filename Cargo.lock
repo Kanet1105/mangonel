@@ -825,6 +825,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mangonel-trafficgen"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "libc",
+ "mangonel-libxdp",
+ "mangonel-nic",
+ "mangonel-wire",
+ "thiserror",
+]
+
+[[package]]
 name = "mangonel-wire"
 version = "0.1.0"
 dependencies = [
