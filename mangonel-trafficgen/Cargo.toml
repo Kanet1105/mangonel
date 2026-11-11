@@ -1,0 +1,17 @@
+[package]
+name = "mangonel-trafficgen"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+mangonel-libxdp = { workspace = true }
+mangonel-nic = { workspace = true }
+mangonel-wire = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "error-context", "help", "std", "usage"] }
+libc = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true
