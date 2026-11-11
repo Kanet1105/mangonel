@@ -7,6 +7,7 @@ members = [
     "mangonel-libxdp-sys",
     "mangonel-nic",
     "mangonel-ring",
+    "mangonel-router",
     "mangonel-wire",
 ]
 
@@ -24,10 +25,13 @@ mangonel-wire = { path = "mangonel-wire" }
 
 # default-features = false throughout; each crate turns on the
 # features it needs.
+clap = { version = "4.6", default-features = false }
+cliclack = { version = "0.5", default-features = false }
 criterion = { version = "0.8", default-features = false }
 crossbeam-queue = { version = "0.3", default-features = false }
 crossbeam-utils = { version = "0.8", default-features = false }
 dhcproto = { version = "0.15", default-features = false }
+left-right = { version = "0.11", default-features = false }
 libc = { version = "0.2", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 

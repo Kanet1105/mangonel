@@ -1,0 +1,20 @@
+[package]
+name = "mangonel-router"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+mangonel-dhcp = { workspace = true }
+mangonel-libxdp = { workspace = true }
+mangonel-nic = { workspace = true }
+mangonel-wire = { workspace = true }
+
+clap = { workspace = true, features = ["derive", "error-context", "help", "std", "usage"] }
+cliclack = { workspace = true }
+left-right = { workspace = true }
+libc = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

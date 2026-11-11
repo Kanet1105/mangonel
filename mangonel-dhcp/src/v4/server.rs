@@ -339,7 +339,7 @@ impl Server {
         })
     }
 
-    /// The configuration the server was built with.
+    /// The configuration the server runs with.
     ///
     /// # Examples
     /// ```
@@ -362,6 +362,32 @@ impl Server {
     /// ```
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Replaces the resolvers advertised to clients, keeping
+    /// every lease.
+    ///
+    /// # Examples
+    /// ```
+    /// use std::{collections::HashMap, net::Ipv4Addr, time::Duration};
+    ///
+    /// use mangonel_dhcp::v4::server::{Config, Server};
+    ///
+    /// # let mut server = Server::new(Config {
+    /// # address: Ipv4Addr::new(10, 0, 0, 1),
+    /// # prefix: 24,
+    /// # pool_start: Ipv4Addr::new(10, 0, 0, 10),
+    /// # pool_end: Ipv4Addr::new(10, 0, 0, 200),
+    /// # dns: vec![],
+    /// # reservations: HashMap::new(),
+    /// # lease_time: Duration::from_secs(3600),
+    /// # })?;
+    /// server.set_dns(vec![Ipv4Addr::new(9, 9, 9, 9)]);
+    /// assert_eq!(server.config().dns, [Ipv4Addr::new(9, 9, 9, 9)]);
+    /// # Ok::<(), mangonel_dhcp::Error>(())
+    /// ```
+    pub fn set_dns(&mut self, dns: Vec<Ipv4Addr>) {
+        self.config.dns = dns;
     }
 
     /// Every offer and lease still held, in no particular order.

@@ -8,5 +8,10 @@ license.workspace = true
 dhcproto = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 
+[dev-dependencies]
+mangonel-wire = { workspace = true }
+
+libc = { workspace = true }
+
 [lints]
 workspace = true
