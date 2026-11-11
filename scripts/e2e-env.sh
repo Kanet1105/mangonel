@@ -46,10 +46,15 @@
 #
 # QUEUES=n sets every veth's queue count (default 1). AF_XDP binds one socket
 # per queue, and a veth gets one queue per CPU unless told otherwise.
+# QUEUES_WAN, QUEUES_LAN_0 and QUEUES_LAN_1 set the count of the pair behind
+# that gateway port alone, so the gateway can be given ports that differ.
 
 set -Eeuo pipefail
 
 QUEUES="${QUEUES:-1}"
+QUEUES_WAN="${QUEUES_WAN:-$QUEUES}"
+QUEUES_LAN_0="${QUEUES_LAN_0:-$QUEUES}"
+QUEUES_LAN_1="${QUEUES_LAN_1:-$QUEUES}"
 
 GATEWAY=test-gateway
 WAN=test-wan
@@ -87,14 +92,15 @@ ns_exists() {
     ip netns list | awk '{ print $1 }' | grep -qx -- "$1"
 }
 
-# veth NS1 IF1 MAC1 NS2 IF2 MAC2: one pair with an end in each namespace. Both
-# ends are born inside their namespace, so a name like eth0 never collides with
-# the host's.
+# veth NS1 IF1 MAC1 NS2 IF2 MAC2 [QUEUES]: one pair with an end in each
+# namespace and QUEUES queues on both, $QUEUES unless given. Both ends are born
+# inside their namespace, so a name like eth0 never collides with the host's.
 veth() {
+    local queues="${7:-$QUEUES}"
     ip link add "$2" address "$3" netns "$1" \
-        numtxqueues "$QUEUES" numrxqueues "$QUEUES" \
+        numtxqueues "$queues" numrxqueues "$queues" \
         type veth peer name "$5" address "$6" netns "$4" \
-        numtxqueues "$QUEUES" numrxqueues "$QUEUES"
+        numtxqueues "$queues" numrxqueues "$queues"
 }
 
 up() {
@@ -109,9 +115,9 @@ up() {
         ip -n "$ns" link set lo up
     done
 
-    veth "$GATEWAY" wan 02:00:00:01:00:01 "$WAN" eth0 02:00:00:02:00:01
-    veth "$GATEWAY" lan-0 02:00:00:01:00:02 "${NODES[0]}" eth0 02:00:00:04:00:00
-    veth "$GATEWAY" lan-1 02:00:00:01:00:03 "$SWITCH" lan-1 02:00:00:03:00:01
+    veth "$GATEWAY" wan 02:00:00:01:00:01 "$WAN" eth0 02:00:00:02:00:01 "$QUEUES_WAN"
+    veth "$GATEWAY" lan-0 02:00:00:01:00:02 "${NODES[0]}" eth0 02:00:00:04:00:00 "$QUEUES_LAN_0"
+    veth "$GATEWAY" lan-1 02:00:00:01:00:03 "$SWITCH" lan-1 02:00:00:03:00:01 "$QUEUES_LAN_1"
     for i in 1 2; do
         veth "${NODES[i]}" eth0 "02:00:00:04:00:0$i" "$SWITCH" "node-$i" "02:00:00:03:01:0$i"
     done
@@ -250,9 +256,14 @@ main() {
             ;;
     esac
     if [ "$(id -u)" -ne 0 ]; then
-        exec sudo -- env QUEUES="$QUEUES" "$0" "$@"
+        exec sudo -- env QUEUES="$QUEUES" QUEUES_WAN="$QUEUES_WAN" \
+            QUEUES_LAN_0="$QUEUES_LAN_0" QUEUES_LAN_1="$QUEUES_LAN_1" "$0" "$@"
     fi
-    [[ $QUEUES =~ ^[1-9][0-9]*$ ]] || die "QUEUES must be a positive integer, not '$QUEUES'"
+    local name
+    for name in QUEUES QUEUES_WAN QUEUES_LAN_0 QUEUES_LAN_1; do
+        [[ ${!name} =~ ^[1-9][0-9]*$ ]] ||
+            die "$name must be a positive integer, not '${!name}'"
+    done
     for tool in ip bridge ethtool sysctl ping; do
         command -v "$tool" >/dev/null || die "$tool is not installed"
     done
