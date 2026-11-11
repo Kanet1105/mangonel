@@ -114,6 +114,37 @@ impl XdpDescriptor {
 
         &mut self.as_slice_mut()[headroom..]
     }
+
+    /// The most [`Self::set_length`] takes: the bytes from
+    /// the frame's first to the end of its umem frame.
+    /// Panics if empty.
+    pub fn capacity(&self) -> u32 {
+        assert!(
+            !self.is_empty(),
+            "XdpDescriptor is empty: its frame was sent or dropped."
+        );
+        // Frames are power-of-two sized.
+        let frame_size = Umem::global().config().frame_size;
+        let offset = u32::try_from(self.address & u64::from(frame_size - 1))
+            .expect("A frame offset is below the frame size. This is a bug.");
+
+        frame_size - offset
+    }
+
+    /// Makes the frame `length` bytes long, to build a
+    /// reply or a new packet in it. Growing exposes
+    /// whatever the umem frame last held, so write every
+    /// byte gained. Panics if empty or past
+    /// [`Self::capacity`].
+    pub fn set_length(&mut self, length: u32) {
+        let capacity = self.capacity();
+        assert!(
+            length <= capacity,
+            "XdpDescriptor holds at most {capacity} bytes, not {length}."
+        );
+
+        self.length = length;
+    }
 }
 
 #[cfg(test)]

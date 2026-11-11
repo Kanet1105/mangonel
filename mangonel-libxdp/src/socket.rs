@@ -289,6 +289,38 @@ impl XdpSocket {
         }
     }
 
+    /// Fills the front of `buffer` with one zero-length
+    /// frame each out of the umem's pool, to build packets
+    /// in with [`XdpDescriptor::set_length`]; returns the
+    /// count, short when the pool is. Overwriting a slot
+    /// that still holds a frame leaks it.
+    #[must_use = "the count says how many descriptors were filled with empty frames"]
+    pub fn allocate(&mut self, buffer: &mut [XdpDescriptor]) -> u32 {
+        let umem = Umem::global();
+        // An empty pool or an empty buffer grants nothing.
+        let Ok(mut grant) = umem.pool().bulk_read(buffer.len()) else {
+            return 0;
+        };
+
+        // A pooled address points anywhere in its frame: a
+        // received frame comes back at its data offset.
+        // Building starts past the headroom, as the slice
+        // accessors expect.
+        let config = umem.config();
+        let frame_mask = u64::from(config.frame_size - 1);
+        let headroom = u64::from(config.frame_headroom);
+        let mut allocated: u32 = 0;
+        for slot in buffer.iter_mut().take(grant.size()) {
+            let address = grant
+                .read()
+                .expect("The frame pool has a gap: every writer fills its grant. This is a bug.");
+            *slot = XdpDescriptor::new((address & !frame_mask) + headroom, 0);
+            allocated += 1;
+        }
+
+        allocated
+    }
+
     /// Returns every completed tx frame to the umem's pool.
     fn complete(&self) {
         let (claimed, index) = self.completion_ring.claim(self.completion_ring.size());
