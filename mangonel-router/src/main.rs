@@ -15,14 +15,29 @@ mod error;
 mod prompt;
 mod signal;
 
-use std::{num::NonZeroU32, process::ExitCode, sync::atomic::Ordering, thread, time::Duration};
+use std::{
+    num::NonZeroU32,
+    process::ExitCode,
+    sync::atomic::Ordering,
+    thread,
+    time::Duration,
+};
 
 use clap::Parser;
 use mangonel_nic::nic::Nic;
 
 use crate::{
-    cli::{Cli, Lan, Wan},
-    control::{Addressing, ControlPanel, LanPort, WanPort},
+    cli::{
+        Cli,
+        Lan,
+        Wan,
+    },
+    control::{
+        Addressing,
+        ControlPanel,
+        LanPort,
+        WanPort,
+    },
     data::DataPlane,
     error::Error,
 };
