@@ -139,6 +139,14 @@ impl Family {
             IpAddr::V6(_) => Family::V6,
         }
     }
+
+    /// How many bits an address of the family has, which is its longest prefix length.
+    fn bits(self) -> u8 {
+        match self {
+            Family::V4 => 32,
+            Family::V6 => 128,
+        }
+    }
 }
 
 impl fmt::Display for Family {
@@ -240,6 +248,9 @@ pub(crate) enum Invalid {
     #[error("an interface cannot have its subnet's network or broadcast address")]
     NotHost,
 
+    #[error("a /{0} leaves the LAN no address for a host")]
+    NoHosts(u8),
+
     /// The subnet shares addresses with the one named, which an interface asked before has.
     #[error("overlaps {0} on {1}")]
     Overlap(Cidr, Role),
@@ -259,10 +270,7 @@ fn address(text: &str, family: Family) -> Result<IpAddr, Invalid> {
 
 /// Reads a prefix length that fits `family`.
 fn prefix(text: &str, family: Family) -> Result<u8, Invalid> {
-    let longest = match family {
-        Family::V4 => 32,
-        Family::V6 => 128,
-    };
+    let longest = family.bits();
 
     match text.trim().parse() {
         Ok(prefix) if (1..=longest).contains(&prefix) => Ok(prefix),
@@ -282,9 +290,12 @@ pub(crate) fn cidr(text: &str, family: Family) -> Result<Cidr, Invalid> {
     Ok(Cidr { address, prefix })
 }
 
-/// Reads the CIDR of a `family` subnet that shares no address with any of `taken`.
+/// Reads the CIDR of a `family` subnet with room for a host and no address shared with `taken`.
 pub(crate) fn subnet(text: &str, family: Family, taken: &[(Role, Cidr)]) -> Result<Cidr, Invalid> {
     let cidr = self::cidr(text, family)?;
+    if cidr.prefix == family.bits() {
+        return Err(Invalid::NoHosts(cidr.prefix));
+    }
 
     match taken.iter().find(|(_, other)| overlap(cidr, *other)) {
         Some(&(role, other)) => Err(Invalid::Overlap(other, role)),
