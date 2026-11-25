@@ -237,6 +237,9 @@ pub(crate) enum Invalid {
     #[error("not inside the subnet, and not a link-local address")]
     OffLink,
 
+    #[error("an interface cannot have its subnet's network or broadcast address")]
+    NotHost,
+
     /// The subnet shares addresses with the one named, which an interface asked before has.
     #[error("overlaps {0} on {1}")]
     Overlap(Cidr, Role),
@@ -267,11 +270,14 @@ fn prefix(text: &str, family: Family) -> Result<u8, Invalid> {
     }
 }
 
-/// Reads an address of `family` and its prefix length in CIDR format.
+/// Reads, in CIDR format, an address of `family` an interface can have and its prefix length.
 pub(crate) fn cidr(text: &str, family: Family) -> Result<Cidr, Invalid> {
     let (address, prefix) = text.split_once('/').ok_or(Invalid::Cidr)?;
     let address = self::address(address, family)?;
     let prefix = self::prefix(prefix, family)?;
+    if network_or_broadcast(address, prefix) {
+        return Err(Invalid::NotHost);
+    }
 
     Ok(Cidr { address, prefix })
 }
@@ -306,16 +312,26 @@ pub(crate) fn gateway(text: &str, cidr: Cidr) -> Result<IpAddr, Invalid> {
 /// Whether a neighbour of the interface at `cidr` can have `address`.
 fn on_link(cidr: Cidr, address: IpAddr) -> bool {
     match (cidr.address, address) {
-        (IpAddr::V4(_), IpAddr::V4(v4)) => {
-            let hosts = hosts_v4(cidr.prefix);
-            let host = u32::from(v4) & hosts;
-
-            // Up to /30 the first and last addresses are the network's and the broadcast's.
-            in_subnet(cidr, address) && (cidr.prefix > 30 || (host != 0 && host != hosts))
+        (IpAddr::V4(_), IpAddr::V4(_)) => {
+            in_subnet(cidr, address) && !network_or_broadcast(address, cidr.prefix)
         }
         // A link-local address is on every link, whatever the prefix.
         (IpAddr::V6(_), IpAddr::V6(v6)) => in_subnet(cidr, address) || v6.is_unicast_link_local(),
         _ => false,
+    }
+}
+
+/// Whether `address` is the first or last of its subnet where those are the network's and the
+/// broadcast's, which is IPv4 up to /30.
+fn network_or_broadcast(address: IpAddr, prefix: u8) -> bool {
+    match address {
+        IpAddr::V4(address) if prefix <= 30 => {
+            let hosts = hosts_v4(prefix);
+            let host = u32::from(address) & hosts;
+
+            host == 0 || host == hosts
+        }
+        IpAddr::V4(_) | IpAddr::V6(_) => false,
     }
 }
 
