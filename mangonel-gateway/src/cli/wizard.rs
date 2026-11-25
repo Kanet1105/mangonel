@@ -375,7 +375,7 @@ pub(crate) fn run(devices: &[Device], prompt: &mut impl Prompt) -> Result<Setup,
 
             Step::WanGateway(family, cidr) => {
                 let draft = wan.family_mut(family);
-                let parse = move |text: &str| config::gateway(text, cidr.address);
+                let parse = move |text: &str| config::gateway(text, cidr);
                 prompt
                     .text(Role::Wan, family, Field::Gateway, draft.gateway, parse)?
                     .map(|gateway| {

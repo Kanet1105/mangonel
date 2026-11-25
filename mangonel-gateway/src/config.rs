@@ -230,6 +230,9 @@ pub(crate) enum Invalid {
     #[error("not a host address inside the subnet")]
     OutsideSubnet,
 
+    #[error("not inside the subnet, and not a link-local address")]
+    OffLink,
+
     /// Any other reason the DHCP server gives, in its words.
     #[error("{0}")]
     Pool(String),
@@ -265,14 +268,43 @@ pub(crate) fn cidr(text: &str, family: Family) -> Result<Cidr, Invalid> {
     Ok(Cidr { address, prefix })
 }
 
-/// Reads a gateway of the same family as `address` that is not `address` itself.
-pub(crate) fn gateway(text: &str, address: IpAddr) -> Result<IpAddr, Invalid> {
-    let gateway = self::address(text, Family::of(address))?;
-    if gateway == address {
+/// Reads a gateway the interface at `cidr` reaches on its own link, other than itself.
+pub(crate) fn gateway(text: &str, cidr: Cidr) -> Result<IpAddr, Invalid> {
+    let family = Family::of(cidr.address);
+    let gateway = address(text, family)?;
+    if gateway == cidr.address {
         return Err(Invalid::OwnAddress);
+    }
+    if !on_link(cidr, gateway) {
+        return Err(match family {
+            Family::V4 => Invalid::OutsideSubnet,
+            Family::V6 => Invalid::OffLink,
+        });
     }
 
     Ok(gateway)
+}
+
+/// Whether a neighbour of the interface at `cidr` can have `address`.
+fn on_link(cidr: Cidr, address: IpAddr) -> bool {
+    match (cidr.address, address) {
+        (IpAddr::V4(own), IpAddr::V4(address)) => {
+            let (own, address) = (u32::from(own), u32::from(address));
+            // The bits a prefix leaves to the hosts; none at /32, where the shift overflows.
+            let hosts = u32::MAX.checked_shr(u32::from(cidr.prefix)).unwrap_or(0);
+            let host = address & hosts;
+
+            // Up to /30 the first and last addresses are the network's and the broadcast's.
+            (own ^ address) & !hosts == 0 && (cidr.prefix > 30 || (host != 0 && host != hosts))
+        }
+        (IpAddr::V6(own), IpAddr::V6(address)) => {
+            let hosts = u128::MAX.checked_shr(u32::from(cidr.prefix)).unwrap_or(0);
+
+            // A link-local address is on every link, whatever the prefix.
+            (u128::from(own) ^ u128::from(address)) & !hosts == 0 || address.is_unicast_link_local()
+        }
+        _ => false,
+    }
 }
 
 /// Reads the first address of a DHCP pool on the subnet of `cidr`.
