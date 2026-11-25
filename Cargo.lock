@@ -695,6 +695,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mangonel-gateway"
+version = "0.1.0"
+dependencies = [
+ "inquire",
+ "mangonel-dhcp",
+ "mangonel-nic",
+ "thiserror",
+]
+
+[[package]]
 name = "mangonel-libxdp"
 version = "0.1.0"
 dependencies = [
@@ -726,16 +736,6 @@ dependencies = [
  "criterion",
  "crossbeam-queue",
  "crossbeam-utils",
- "thiserror",
-]
-
-[[package]]
-name = "mangonel-router"
-version = "0.1.0"
-dependencies = [
- "inquire",
- "mangonel-dhcp",
- "mangonel-nic",
  "thiserror",
 ]
 

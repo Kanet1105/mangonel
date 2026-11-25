@@ -1,4 +1,4 @@
-//! mangonel-router: the WAN/LAN router.
+//! mangonel-gateway: the WAN/LAN gateway.
 
 #![warn(unreachable_pub)]
 
@@ -37,7 +37,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("mangonel-router: {e}");
+            eprintln!("mangonel-gateway: {e}");
 
             ExitCode::FAILURE
         }

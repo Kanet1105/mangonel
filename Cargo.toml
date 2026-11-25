@@ -3,11 +3,11 @@ resolver = "3"
 members = [
     "mangonel",
     "mangonel-dhcp",
+    "mangonel-gateway",
     "mangonel-libxdp",
     "mangonel-libxdp-sys",
     "mangonel-nic",
     "mangonel-ring",
-    "mangonel-router",
     "mangonel-wire",
 ]
 
