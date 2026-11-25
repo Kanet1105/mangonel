@@ -53,10 +53,11 @@ impl fmt::Display for Wan {
     }
 }
 
-/// A LAN's device and the router's subnet on it in each family.
+/// A LAN's devices and the router's subnet on them in each family.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Lan {
-    pub(crate) device: String,
+    /// The devices bridged into the LAN, at least one.
+    pub(crate) devices: Vec<String>,
     pub(crate) ipv4: Subnet,
     /// `None` if the LAN has no IPv6 address.
     pub(crate) ipv6: Option<Subnet>,
@@ -64,7 +65,10 @@ pub(crate) struct Lan {
 
 impl fmt::Display for Lan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.device)?;
+        f.write_str(&self.devices.join(", "))?;
+        if self.devices.len() > 1 {
+            f.write_str(" (bridged)")?;
+        }
         family_line(f, Family::V4, Some(self.ipv4))?;
 
         family_line(f, Family::V6, self.ipv6)
@@ -233,6 +237,10 @@ pub(crate) enum Invalid {
     #[error("not inside the subnet, and not a link-local address")]
     OffLink,
 
+    /// The subnet shares addresses with the one named, which an interface asked before has.
+    #[error("overlaps {0} on {1}")]
+    Overlap(Cidr, Role),
+
     /// Any other reason the DHCP server gives, in its words.
     #[error("{0}")]
     Pool(String),
@@ -268,6 +276,16 @@ pub(crate) fn cidr(text: &str, family: Family) -> Result<Cidr, Invalid> {
     Ok(Cidr { address, prefix })
 }
 
+/// Reads the CIDR of a `family` subnet that shares no address with any of `taken`.
+pub(crate) fn subnet(text: &str, family: Family, taken: &[(Role, Cidr)]) -> Result<Cidr, Invalid> {
+    let cidr = self::cidr(text, family)?;
+
+    match taken.iter().find(|(_, other)| overlap(cidr, *other)) {
+        Some(&(role, other)) => Err(Invalid::Overlap(other, role)),
+        None => Ok(cidr),
+    }
+}
+
 /// Reads a gateway the interface at `cidr` reaches on its own link, other than itself.
 pub(crate) fn gateway(text: &str, cidr: Cidr) -> Result<IpAddr, Invalid> {
     let family = Family::of(cidr.address);
@@ -288,23 +306,51 @@ pub(crate) fn gateway(text: &str, cidr: Cidr) -> Result<IpAddr, Invalid> {
 /// Whether a neighbour of the interface at `cidr` can have `address`.
 fn on_link(cidr: Cidr, address: IpAddr) -> bool {
     match (cidr.address, address) {
-        (IpAddr::V4(own), IpAddr::V4(address)) => {
-            let (own, address) = (u32::from(own), u32::from(address));
-            // The bits a prefix leaves to the hosts; none at /32, where the shift overflows.
-            let hosts = u32::MAX.checked_shr(u32::from(cidr.prefix)).unwrap_or(0);
-            let host = address & hosts;
+        (IpAddr::V4(_), IpAddr::V4(v4)) => {
+            let hosts = hosts_v4(cidr.prefix);
+            let host = u32::from(v4) & hosts;
 
             // Up to /30 the first and last addresses are the network's and the broadcast's.
-            (own ^ address) & !hosts == 0 && (cidr.prefix > 30 || (host != 0 && host != hosts))
+            in_subnet(cidr, address) && (cidr.prefix > 30 || (host != 0 && host != hosts))
+        }
+        // A link-local address is on every link, whatever the prefix.
+        (IpAddr::V6(_), IpAddr::V6(v6)) => in_subnet(cidr, address) || v6.is_unicast_link_local(),
+        _ => false,
+    }
+}
+
+/// Whether the subnets of `a` and `b` share an address.
+fn overlap(a: Cidr, b: Cidr) -> bool {
+    // They do when the one with the shorter prefix holds the other.
+    let shorter = Cidr {
+        address: a.address,
+        prefix: a.prefix.min(b.prefix),
+    };
+
+    in_subnet(shorter, b.address)
+}
+
+/// Whether `address` is in the subnet of `cidr`, which an address of the other family never is.
+fn in_subnet(cidr: Cidr, address: IpAddr) -> bool {
+    match (cidr.address, address) {
+        (IpAddr::V4(own), IpAddr::V4(address)) => {
+            (u32::from(own) ^ u32::from(address)) & !hosts_v4(cidr.prefix) == 0
         }
         (IpAddr::V6(own), IpAddr::V6(address)) => {
-            let hosts = u128::MAX.checked_shr(u32::from(cidr.prefix)).unwrap_or(0);
-
-            // A link-local address is on every link, whatever the prefix.
-            (u128::from(own) ^ u128::from(address)) & !hosts == 0 || address.is_unicast_link_local()
+            (u128::from(own) ^ u128::from(address)) & !hosts_v6(cidr.prefix) == 0
         }
         _ => false,
     }
+}
+
+/// The bits an IPv4 prefix leaves to the hosts; none at /32, where the shift overflows.
+fn hosts_v4(prefix: u8) -> u32 {
+    u32::MAX.checked_shr(u32::from(prefix)).unwrap_or(0)
+}
+
+/// The bits an IPv6 prefix leaves to the hosts; none at /128, where the shift overflows.
+fn hosts_v6(prefix: u8) -> u128 {
+    u128::MAX.checked_shr(u32::from(prefix)).unwrap_or(0)
 }
 
 /// Reads the first address of a DHCP pool on the subnet of `cidr`.

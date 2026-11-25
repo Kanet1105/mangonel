@@ -5,9 +5,11 @@ use std::fmt;
 use inquire::{
     CustomUserError,
     InquireError,
+    MultiSelect,
     Select,
     Text,
     error::InquireResult,
+    list_option::ListOption,
     ui::{
         Color,
         RenderConfig,
@@ -39,6 +41,10 @@ const LIST_HELP: &str = "↑↓ to move, enter to select, type to filter";
 
 /// What a list says about its keys.
 const LIST_HELP_BACK: &str = "↑↓ to move, enter to select, type to filter, ctrl+d to go back";
+
+/// What a list that takes several picks says about its keys.
+const PICK_HELP: &str =
+    "↑↓ to move, space to pick, enter to confirm, type to filter, ctrl+d to go back";
 
 /// What a typed question says about its keys.
 const TEXT_HELP: &str = "ctrl+d to go back";
@@ -91,19 +97,46 @@ impl Prompt for Terminal {
         role: Role,
         candidates: &[&Device],
         initial: Option<usize>,
-        back: bool,
     ) -> Result<Reply<usize>, Error> {
-        let widths = candidates.iter().map(|device| device.name.chars().count());
-        let width = widths.max().unwrap_or(0);
-        let label = |device: &Device| format!("{:<width$}  {}", device.name, device.detail);
-        let choices: Vec<(String, usize)> = candidates
-            .iter()
+        let choices: Vec<(String, usize)> = labels(candidates)
+            .into_iter()
             .enumerate()
-            .map(|(position, device)| (label(device), position))
+            .map(|(position, label)| (label, position))
             .collect();
-        let help = if back { LIST_HELP_BACK } else { LIST_HELP };
 
-        self.select(&format!("{role} device"), &choices, initial, help)
+        self.select(&format!("{role} device"), &choices, initial, LIST_HELP)
+    }
+
+    fn devices(
+        &mut self,
+        role: Role,
+        candidates: &[&Device],
+        initial: &[usize],
+    ) -> Result<Reply<Vec<usize>>, Error> {
+        let title = format!("{role} devices");
+        let at_least_one = |picked: &[ListOption<&String>]| -> Result<Validation, CustomUserError> {
+            Ok(if picked.is_empty() {
+                Validation::Invalid("pick at least one device with space".into())
+            } else {
+                Validation::Valid
+            })
+        };
+        // The answer is shown as the names alone, not the whole lines picked.
+        let named = |picked: &[ListOption<&String>]| {
+            let picked: Vec<&Device> = picked.iter().map(|line| candidates[line.index]).collect();
+
+            names(&picked)
+        };
+        let asked = MultiSelect::new(&title, labels(candidates))
+            .with_default(initial)
+            .with_starting_cursor(initial.first().copied().unwrap_or(0))
+            .with_validator(at_least_one)
+            .with_formatter(&named)
+            .with_help_message(PICK_HELP)
+            .with_render_config(self.render)
+            .raw_prompt();
+
+        Ok(reply(asked)?.map(|picked| picked.iter().map(|line| line.index).collect()))
     }
 
     fn method(
@@ -130,10 +163,10 @@ impl Prompt for Terminal {
         &mut self,
         role: Role,
         family: Family,
-        device: &Device,
+        devices: &[&Device],
         initial: bool,
     ) -> Result<Reply<bool>, Error> {
-        let title = format!("Set an {family} address for {role} on {}?", device.name);
+        let title = format!("Set an {family} address for {role} on {}?", names(devices));
 
         self.yes_or_no(&title, initial)
     }
@@ -144,22 +177,27 @@ impl Prompt for Terminal {
         family: Family,
         field: Field,
         earlier: Option<T>,
-        parse: impl Fn(&str) -> Result<T, Invalid> + Copy + 'static,
+        parse: impl Fn(&str) -> Result<T, Invalid> + Clone + 'static,
     ) -> Result<Reply<T>, Error> {
         let title = format!("{role} {family} {field}");
         let earlier = earlier.map(|earlier| earlier.to_string());
-        let accept = move |text: &str| -> Result<Validation, CustomUserError> {
-            Ok(match parse(text) {
-                Ok(_) => Validation::Valid,
-                Err(refused) => Validation::Invalid(refused.into()),
-            })
+        let accept = {
+            let parse = parse.clone();
+
+            move |text: &str| -> Result<Validation, CustomUserError> {
+                Ok(match parse(text) {
+                    Ok(_) => Validation::Valid,
+                    Err(refused) => Validation::Invalid(refused.into()),
+                })
+            }
         };
 
         let mut text = Text::new(&title)
             .with_validator(accept)
             .with_help_message(TEXT_HELP)
             .with_render_config(self.render);
-        if let Some(example) = example(role, family, field) {
+        let example = example(role, family, field);
+        if let Some(example) = &example {
             text = text.with_placeholder(example);
         }
         if let Some(earlier) = &earlier {
@@ -175,19 +213,19 @@ impl Prompt for Terminal {
         &mut self,
         role: Role,
         family: Family,
-        device: &Device,
+        devices: &[&Device],
         initial: bool,
     ) -> Result<Reply<bool>, Error> {
         let title = format!(
             "Use the router as {family} DHCP server for {role} on {}?",
-            device.name
+            names(devices)
         );
 
         self.yes_or_no(&title, initial)
     }
 
     fn another_lan(&mut self, available: bool, initial: bool) -> Result<Reply<bool>, Error> {
-        let title = "Add another LAN device?";
+        let title = "Add another LAN?";
         if !available {
             let choices = [("No (every device is in use)".to_owned(), false)];
 
@@ -196,6 +234,22 @@ impl Prompt for Terminal {
 
         self.yes_or_no(title, initial)
     }
+}
+
+/// A line per device, the names padded so that the details line up down a list.
+fn labels(devices: &[&Device]) -> Vec<String> {
+    let widths = devices.iter().map(|device| device.name.chars().count());
+    let width = widths.max().unwrap_or(0);
+    let label = |device: &&Device| format!("{:<width$}  {}", device.name, device.detail);
+
+    devices.iter().map(label).collect()
+}
+
+/// The names of `devices` in a row.
+fn names(devices: &[&Device]) -> String {
+    let names: Vec<&str> = devices.iter().map(|device| device.name.as_str()).collect();
+
+    names.join(", ")
 }
 
 /// Sorts how a prompt ended into an answer, a step back, or the end of the wizard.
@@ -215,12 +269,14 @@ fn reply<T>(asked: InquireResult<T>) -> Result<Reply<T>, Error> {
 }
 
 /// The form to type `field` in, shown while its prompt is empty; `None` for most.
-fn example(role: Role, family: Family, field: Field) -> Option<&'static str> {
+fn example(role: Role, family: Family, field: Field) -> Option<String> {
     match (field, role, family) {
-        (Field::Cidr, Role::Wan, Family::V4) => Some("192.168.1.100/24"),
-        (Field::Cidr, Role::Wan, Family::V6) => Some("2001:db8::100/64"),
-        (Field::Cidr, Role::Lan(_), Family::V4) => Some("192.168.1.1/24"),
-        (Field::Cidr, Role::Lan(_), Family::V6) => Some("fd00::1/64"),
+        (Field::Cidr, Role::Wan, Family::V4) => Some("192.168.1.100/24".to_owned()),
+        (Field::Cidr, Role::Wan, Family::V6) => Some("2001:db8::100/64".to_owned()),
+        // A subnet per LAN, as two LANs cannot share one.
+        (Field::Cidr, Role::Lan(n), Family::V4) => Some(format!("192.168.{}.1/24", n + 1)),
+        (Field::Cidr, Role::Lan(0), Family::V6) => Some("fd00::1/64".to_owned()),
+        (Field::Cidr, Role::Lan(n), Family::V6) => Some(format!("fd00:0:0:{n:x}::1/64")),
         (Field::Gateway | Field::PoolStart | Field::PoolEnd, ..) => None,
     }
 }

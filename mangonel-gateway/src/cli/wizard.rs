@@ -84,15 +84,23 @@ pub(crate) enum Error {
 
 /// Puts the wizard's questions to whoever answers them.
 pub(crate) trait Prompt {
-    /// Asks which of `candidates` takes `role`, by position; `back` is false for the first
-    /// question, which has none to go back to.
+    /// Asks which of `candidates` takes `role`, by position; as the first question it has none to
+    /// go back to.
     fn device(
         &mut self,
         role: Role,
         candidates: &[&Device],
         initial: Option<usize>,
-        back: bool,
     ) -> Result<Reply<usize>, Error>;
+
+    /// Asks which of `candidates` make up `role`, by position and at least one; `initial` are the
+    /// ones picked before.
+    fn devices(
+        &mut self,
+        role: Role,
+        candidates: &[&Device],
+        initial: &[usize],
+    ) -> Result<Reply<Vec<usize>>, Error>;
 
     /// Asks how `device` gets its `family` address; `optional` puts having none on offer, as
     /// `None`.
@@ -105,12 +113,12 @@ pub(crate) trait Prompt {
         optional: bool,
     ) -> Result<Reply<Option<Method>>, Error>;
 
-    /// Asks whether `device` gets a `family` address.
+    /// Asks whether `role`, made up of `devices`, gets a `family` address.
     fn addressed(
         &mut self,
         role: Role,
         family: Family,
-        device: &Device,
+        devices: &[&Device],
         initial: bool,
     ) -> Result<Reply<bool>, Error>;
 
@@ -122,15 +130,15 @@ pub(crate) trait Prompt {
         family: Family,
         field: Field,
         earlier: Option<T>,
-        parse: impl Fn(&str) -> Result<T, Invalid> + Copy + 'static,
+        parse: impl Fn(&str) -> Result<T, Invalid> + Clone + 'static,
     ) -> Result<Reply<T>, Error>;
 
-    /// Asks whether the router is the `family` DHCP server on `device`.
+    /// Asks whether the router is the `family` DHCP server on `role`, made up of `devices`.
     fn dhcp_server(
         &mut self,
         role: Role,
         family: Family,
-        device: &Device,
+        devices: &[&Device],
         initial: bool,
     ) -> Result<Reply<bool>, Error>;
 
@@ -228,8 +236,8 @@ impl SubnetDraft {
 
 /// A LAN's answers so far.
 struct LanDraft {
-    /// Index into the device list.
-    device: usize,
+    /// Indices into the device list.
+    devices: Vec<usize>,
     ipv4: SubnetDraft,
     /// Whether the LAN gets an IPv6 address; `ipv6` counts only if it does.
     use_ipv6: bool,
@@ -237,8 +245,8 @@ struct LanDraft {
 }
 
 impl LanDraft {
-    /// Starts on `device` without IPv6 and with the router as DHCP server.
-    fn new(device: usize) -> Self {
+    /// Starts on `devices` without IPv6 and with the router as DHCP server.
+    fn new(devices: Vec<usize>) -> Self {
         let subnet = SubnetDraft {
             cidr: None,
             serve: true,
@@ -247,7 +255,7 @@ impl LanDraft {
         };
 
         Self {
-            device,
+            devices,
             ipv4: subnet,
             use_ipv6: false,
             ipv6: subnet,
@@ -261,10 +269,10 @@ impl LanDraft {
         }
     }
 
-    /// The finished answers, for the LAN on the device called `device`.
-    fn finish(&self, device: String) -> Lan {
+    /// The finished answers, for the LAN on the devices called `devices`.
+    fn finish(&self, devices: Vec<String>) -> Lan {
         Lan {
-            device,
+            devices,
             ipv4: self.ipv4.finish(),
             ipv6: self.use_ipv6.then(|| self.ipv6.finish()),
         }
@@ -283,7 +291,7 @@ enum Step {
     /// Checked against the address just given.
     WanGateway(Family, Cidr),
 
-    LanDevice(usize),
+    LanDevices(usize),
 
     /// Whether the LAN gets an IPv6 address.
     LanIpv6(usize),
@@ -308,7 +316,7 @@ impl Step {
     fn after_wan(family: Family) -> Self {
         match family {
             Family::V4 => Step::WanMethod(Family::V6),
-            Family::V6 => Step::LanDevice(0),
+            Family::V6 => Step::LanDevices(0),
         }
     }
 
@@ -335,13 +343,18 @@ pub(crate) fn run(devices: &[Device], prompt: &mut impl Prompt) -> Result<Setup,
     loop {
         let reply = match step {
             Step::WanDevice => {
-                let offered: Vec<usize> = (0..devices.len()).collect();
-                let current = Some(wan.device);
-                ask_device(prompt, devices, Role::Wan, &offered, current, false)?.map(|device| {
-                    wan.device = device;
+                let candidates: Vec<&Device> = devices.iter().collect();
+                prompt
+                    .device(Role::Wan, &candidates, Some(wan.device))?
+                    .map(|device| {
+                        assert!(
+                            device < devices.len(),
+                            "the prompt picked a device it was not offered. This is a bug."
+                        );
+                        wan.device = device;
 
-                    Step::WanMethod(Family::V4)
-                })
+                        Step::WanMethod(Family::V4)
+                    })
             }
 
             Step::WanMethod(family) => {
@@ -385,13 +398,13 @@ pub(crate) fn run(devices: &[Device], prompt: &mut impl Prompt) -> Result<Setup,
                     })
             }
 
-            Step::LanDevice(n) => {
+            Step::LanDevices(n) => {
                 let offered = unused(devices.len(), wan.device, &lans[..n]);
-                let current = lans.get(n).map(|lan| lan.device);
-                ask_device(prompt, devices, Role::Lan(n), &offered, current, true)?.map(|device| {
+                let current = lans.get(n).map_or(&[][..], |lan| &lan.devices);
+                ask_devices(prompt, devices, Role::Lan(n), &offered, current)?.map(|picked| {
                     match lans.get_mut(n) {
-                        Some(lan) => lan.device = device,
-                        None => lans.push(LanDraft::new(device)),
+                        Some(lan) => lan.devices = picked,
+                        None => lans.push(LanDraft::new(picked)),
                     }
 
                     Step::LanCidr(n, Family::V4)
@@ -399,10 +412,10 @@ pub(crate) fn run(devices: &[Device], prompt: &mut impl Prompt) -> Result<Setup,
             }
 
             Step::LanIpv6(n) => {
+                let members = members(devices, &lans[n]);
                 let lan = &mut lans[n];
-                let device = &devices[lan.device];
                 prompt
-                    .addressed(Role::Lan(n), Family::V6, device, lan.use_ipv6)?
+                    .addressed(Role::Lan(n), Family::V6, &members, lan.use_ipv6)?
                     .map(|use_ipv6| {
                         lan.use_ipv6 = use_ipv6;
 
@@ -415,8 +428,9 @@ pub(crate) fn run(devices: &[Device], prompt: &mut impl Prompt) -> Result<Setup,
             }
 
             Step::LanCidr(n, family) => {
+                let taken = taken(&wan, &lans[..n], family);
                 let subnet = lans[n].family_mut(family);
-                let parse = move |text: &str| config::cidr(text, family);
+                let parse = move |text: &str| config::subnet(text, family, &taken);
                 prompt
                     .text(Role::Lan(n), family, Field::Cidr, subnet.cidr, parse)?
                     .map(|cidr| {
@@ -427,11 +441,10 @@ pub(crate) fn run(devices: &[Device], prompt: &mut impl Prompt) -> Result<Setup,
             }
 
             Step::Serve(n, family, cidr) => {
-                let lan = &mut lans[n];
-                let device = &devices[lan.device];
-                let subnet = lan.family_mut(family);
+                let members = members(devices, &lans[n]);
+                let subnet = lans[n].family_mut(family);
                 prompt
-                    .dhcp_server(Role::Lan(n), family, device, subnet.serve)?
+                    .dhcp_server(Role::Lan(n), family, &members, subnet.serve)?
                     .map(|serve| {
                         subnet.serve = serve;
 
@@ -476,10 +489,11 @@ pub(crate) fn run(devices: &[Device], prompt: &mut impl Prompt) -> Result<Setup,
             Step::Another(n) => {
                 let available = !unused(devices.len(), wan.device, &lans[..=n]).is_empty();
                 match prompt.another_lan(available, lans.len() > n + 1)? {
-                    Reply::Answer(true) => Reply::Answer(Step::LanDevice(n + 1)),
+                    Reply::Answer(true) => Reply::Answer(Step::LanDevices(n + 1)),
                     Reply::Answer(false) => {
                         let name = |device: usize| devices[device].name.clone();
-                        let lans = lans[..=n].iter().map(|lan| lan.finish(name(lan.device)));
+                        let names = |lan: &LanDraft| lan.devices.iter().map(|&d| name(d)).collect();
+                        let lans = lans[..=n].iter().map(|lan| lan.finish(names(lan)));
 
                         return Ok(Setup {
                             wan: wan.finish(name(wan.device)),
@@ -503,29 +517,66 @@ pub(crate) fn run(devices: &[Device], prompt: &mut impl Prompt) -> Result<Setup,
     }
 }
 
-/// Asks for one of the `offered` devices, starting on `current` if it is among them.
-fn ask_device(
+/// Asks for one or more of the `offered` devices, starting from those of `current` among them.
+fn ask_devices(
     prompt: &mut impl Prompt,
     devices: &[Device],
     role: Role,
     offered: &[usize],
-    current: Option<usize>,
-    back: bool,
-) -> Result<Reply<usize>, Error> {
+    current: &[usize],
+) -> Result<Reply<Vec<usize>>, Error> {
     let candidates: Vec<&Device> = offered.iter().map(|&device| &devices[device]).collect();
-    let initial = current.and_then(|current| offered.iter().position(|&device| device == current));
-    let reply = prompt.device(role, &candidates, initial, back)?;
+    let picked_before = |position: &usize| current.contains(&offered[*position]);
+    let initial: Vec<usize> = (0..offered.len()).filter(picked_before).collect();
+    let reply = prompt.devices(role, &candidates, &initial)?;
 
-    Ok(reply.map(|position| {
-        *offered
-            .get(position)
-            .expect("the prompt picked a device it was not offered. This is a bug.")
+    Ok(reply.map(|positions| {
+        assert!(
+            !positions.is_empty(),
+            "the prompt picked no device. This is a bug."
+        );
+
+        let device = |position: &usize| {
+            *offered
+                .get(*position)
+                .expect("the prompt picked a device it was not offered. This is a bug.")
+        };
+
+        positions.iter().map(device).collect()
     }))
+}
+
+/// The devices of `lan`.
+fn members<'a>(devices: &'a [Device], lan: &LanDraft) -> Vec<&'a Device> {
+    lan.devices.iter().map(|&device| &devices[device]).collect()
 }
 
 /// The devices, out of `count`, that neither the WAN nor any of `lans` uses.
 fn unused(count: usize, wan: usize, lans: &[LanDraft]) -> Vec<usize> {
     (0..count)
-        .filter(|&device| device != wan && lans.iter().all(|lan| lan.device != device))
+        .filter(|device| *device != wan && lans.iter().all(|lan| !lan.devices.contains(device)))
         .collect()
+}
+
+/// The `family` subnets a new LAN has to keep clear of: a static WAN's and those of `lans`.
+fn taken(wan: &WanDraft, lans: &[LanDraft], family: Family) -> Vec<(Role, Cidr)> {
+    let wan = match family {
+        Family::V4 => wan.ipv4,
+        Family::V6 => wan.ipv6,
+    };
+    let wan = match wan.finish() {
+        Some(Addressing::Static { cidr, .. }) => Some((Role::Wan, cidr)),
+        Some(Addressing::Dhcp) | None => None,
+    };
+    let lans = lans.iter().enumerate().filter_map(|(n, lan)| {
+        let subnet = match family {
+            Family::V4 => lan.ipv4,
+            Family::V6 if lan.use_ipv6 => lan.ipv6,
+            Family::V6 => return None,
+        };
+
+        Some((Role::Lan(n), subnet.cidr?))
+    });
+
+    wan.into_iter().chain(lans).collect()
 }
