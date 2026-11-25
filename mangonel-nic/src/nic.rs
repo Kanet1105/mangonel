@@ -189,6 +189,11 @@ impl Nic {
         self.flags & libc::IFF_RUNNING != 0
     }
 
+    /// Whether this is a loopback interface.
+    pub fn is_loopback(&self) -> bool {
+        self.flags & libc::IFF_LOOPBACK != 0
+    }
+
     /// `real_num_rx_queues`, counted from the per-queue
     /// sysfs directories.
     pub fn rx_queues(&self) -> u32 {
@@ -629,6 +634,7 @@ mod tests {
         assert_eq!(lo.name(), "lo");
         assert!(lo.index() > 0);
         assert!(lo.is_up());
+        assert!(lo.is_loopback());
         assert!(lo.mtu() > 0);
         // Loopback has no hardware address.
         assert_eq!(lo.mac(), [0; 6]);

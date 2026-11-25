@@ -1,0 +1,15 @@
+[package]
+name = "mangonel-gateway"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+mangonel-dhcp = { workspace = true }
+mangonel-nic = { workspace = true }
+
+inquire = { workspace = true, features = ["crossterm"] }
+thiserror = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true
